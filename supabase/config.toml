@@ -1,7 +1,1 @@
-project_id = "ekhonguhgkzaactbxnil"
-
-[functions.tenant-reminder]
-verify_jwt = false
-
-[functions.create-member-account]
-verify_jwt = false
+project_id = "kaqxgucpfqaisoqpfqoz"

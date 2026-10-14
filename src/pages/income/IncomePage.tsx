@@ -18,7 +18,7 @@ import { RegisterFilters } from '@/components/registers/RegisterFilters';
 import { SortableHeader } from '@/components/registers/SortableHeader';
 import { RegisterPagination } from '@/components/registers/RegisterPagination';
 import { useRegisterFilters } from '@/hooks/useRegisterFilters';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/db-types';
 
 type IncomeEntry = Database['public']['Tables']['income_entries']['Row'] & {
   members?: Database['public']['Tables']['members']['Row'] | null;

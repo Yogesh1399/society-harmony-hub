@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
@@ -16,12 +16,12 @@ import {
 import { useToast } from '@/hooks/use-toast';
 
 export default function NotificationsPage() {
-  const { currentSocietyId, user, getCurrentRole } = useAuthStore();
+  const { currentSocietyId, user, isAdmin: isAdminFn, getCurrentRole } = useAuthStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const currentRole = getCurrentRole();
-  const isAdmin = currentRole === 'super_admin' || currentRole === 'society_admin';
+  const isAdmin = isAdminFn();
 
   const { data: notifications, isLoading } = useQuery({
     queryKey: ['notifications', currentSocietyId],
@@ -37,6 +37,23 @@ export default function NotificationsPage() {
     },
     enabled: !!currentSocietyId,
   });
+
+  // Realtime: refresh list when new notifications are inserted for this society
+  useEffect(() => {
+    if (!currentSocietyId) return;
+    const channel = supabase
+      .channel(`notif:${currentSocietyId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `society_id=eq.${currentSocietyId}`,
+      }, () => {
+        queryClient.invalidateQueries({ queryKey: ['notifications', currentSocietyId] });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentSocietyId, queryClient]);
 
   const { data: reads } = useQuery({
     queryKey: ['notification_reads', user?.id],

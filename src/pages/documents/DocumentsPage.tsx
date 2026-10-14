@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadPrivateFile, isPrivateFile, openPrivateFile, downloadPrivateFile } from '@/lib/fileStorage';
+import { PrivateFileButton } from '@/components/common/PrivateFileButton';
 import { useAuthStore } from '@/stores/authStore';
 import { format } from 'date-fns';
 import { Plus, FileArchive, Search, Trash2, MoreHorizontal, Download, Eye, Upload } from 'lucide-react';
@@ -82,23 +84,13 @@ export default function DocumentsPage() {
     mutationFn: async (values: DocFormValues) => {
       if (!currentSocietyId || !selectedFile) throw new Error('No file selected');
 
-      const filePath = `${currentSocietyId}/documents/${Date.now()}-${selectedFile.name}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('tenant-documents')
-        .upload(filePath, selectedFile, { upsert: true });
-      if (uploadError) throw uploadError;
-
-      const { data: urlData } = supabase.storage.from('tenant-documents').getPublicUrl(uploadData.path);
-
-      const { error } = await supabase.from('documents').insert({
-        society_id: currentSocietyId,
-        category: values.category,
-        file_name: values.file_name || selectedFile.name,
-        file_url: urlData.publicUrl,
-        file_size: selectedFile.size,
-        uploaded_by: user?.id || null,
+      // Stored privately on Hostinger, outside the webroot. upload.php also
+      // writes the documents row, so there is no separate insert here.
+      await uploadPrivateFile({
+        file: selectedFile,
+        societyId: currentSocietyId,
+        category: values.category || 'Other',
       });
-      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
@@ -247,16 +239,29 @@ export default function DocumentsPage() {
                               <Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem asChild>
-                                <a href={doc.file_url} target="_blank" rel="noreferrer">
-                                  <Eye className="mr-2 h-4 w-4" /> View
-                                </a>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem asChild>
-                                <a href={doc.file_url} download>
-                                  <Download className="mr-2 h-4 w-4" /> Download
-                                </a>
-                              </DropdownMenuItem>
+                              {isPrivateFile(doc.file_url) ? (
+                                <>
+                                  <DropdownMenuItem onSelect={(e) => { e.preventDefault(); openPrivateFile(doc.id).catch((err) => toast({ title: 'Could not open file', description: err.message, variant: 'destructive' })); }}>
+                                    <Eye className="mr-2 h-4 w-4" /> View
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onSelect={(e) => { e.preventDefault(); downloadPrivateFile(doc.id, doc.file_name).catch((err) => toast({ title: 'Could not download file', description: err.message, variant: 'destructive' })); }}>
+                                    <Download className="mr-2 h-4 w-4" /> Download
+                                  </DropdownMenuItem>
+                                </>
+                              ) : (
+                                <>
+                                  <DropdownMenuItem asChild>
+                                    <a href={doc.file_url} target="_blank" rel="noreferrer">
+                                      <Eye className="mr-2 h-4 w-4" /> View
+                                    </a>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem asChild>
+                                    <a href={doc.file_url} download>
+                                      <Download className="mr-2 h-4 w-4" /> Download
+                                    </a>
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                               <DropdownMenuItem onClick={() => setDeleteItem(doc)} className="text-destructive">
                                 <Trash2 className="mr-2 h-4 w-4" /> Delete
                               </DropdownMenuItem>
@@ -281,9 +286,15 @@ export default function DocumentsPage() {
                             <span className="text-xs text-muted-foreground">{formatSize(doc.file_size)}</span>
                           </div>
                         </div>
-                        <a href={doc.file_url} target="_blank" rel="noreferrer">
-                          <Button variant="ghost" size="icon"><Eye className="h-4 w-4" /></Button>
-                        </a>
+                        {isPrivateFile(doc.file_url) ? (
+                          <Button variant="ghost" size="icon" onClick={() => openPrivateFile(doc.id).catch((err) => toast({ title: 'Could not open file', description: err.message, variant: 'destructive' }))}>
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                        ) : (
+                          <a href={doc.file_url} target="_blank" rel="noreferrer">
+                            <Button variant="ghost" size="icon"><Eye className="h-4 w-4" /></Button>
+                          </a>
+                        )}
                       </div>
                     </CardContent>
                   </Card>

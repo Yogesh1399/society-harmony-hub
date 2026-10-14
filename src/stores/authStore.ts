@@ -39,6 +39,7 @@ interface AuthState {
   
   // Computed
   isSuperAdmin: () => boolean;
+  isAdmin: () => boolean;
   getCurrentRole: () => AppRole | null;
   hasRole: (role: AppRole) => boolean;
   canAccessSociety: (societyId: string) => boolean;
@@ -71,6 +72,14 @@ export const useAuthStore = create<AuthState>()(
         const { roles } = get();
         return roles.some(r => r.role === 'super_admin' && r.society_id === null);
       },
+
+      isAdmin: () => {
+        const { roles, currentSocietyId } = get();
+        if (roles.some(r => r.role === 'super_admin' && r.society_id === null)) return true;
+        return roles.some(r => r.role === 'society_admin' && (r.society_id === currentSocietyId || r.society_id === null));
+      },
+
+
       
       getCurrentRole: () => {
         const { roles, currentSocietyId } = get();

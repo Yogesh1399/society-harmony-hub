@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/db-types';
 
 type Flat = Database['public']['Tables']['flats']['Row'];
 type FlatStatus = Database['public']['Enums']['flat_status'];
@@ -56,7 +56,7 @@ export function FlatForm({ flat, onClose }: FlatFormProps) {
       floor: flat?.floor ?? undefined,
       area_sqft: flat?.area_sqft ? Number(flat.area_sqft) : undefined,
       parking_slots: flat?.parking_slots || 0,
-      status: (flat?.status as FlatStatus) || 'vacant',
+      status: ((flat?.status as any) || 'vacant') as FlatFormValues['status'],
     },
   });
 

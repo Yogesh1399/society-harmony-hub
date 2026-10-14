@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadPrivateFile } from '@/lib/fileStorage';
 import { useAuthStore } from '@/stores/authStore';
 import { format, differenceInYears } from 'date-fns';
 import { User, Calendar, Home, FileText, Upload, Users, Shield, ShieldAlert, ShieldCheck } from 'lucide-react';
@@ -55,16 +56,16 @@ export default function TenantPortal() {
   const uploadDoc = useMutation({
     mutationFn: async ({ file, type }: { file: File; type: string }) => {
       if (!tenant) throw new Error('No tenant record');
-      const path = `${tenant.society_id}/${tenant.id}/${type}-${Date.now()}`;
-      const { error: uploadError } = await supabase.storage
-        .from('tenant-documents')
-        .upload(path, file, { upsert: true });
-      if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage.from('tenant-documents').getPublicUrl(path);
-      
+      const saved = await uploadPrivateFile({
+        file,
+        societyId: tenant.society_id,
+        category: type === 'rent-agreement' ? 'Rent Agreement' : 'Police Verification',
+        entityId: tenant.id,
+      });
+
       const updateField = type === 'rent-agreement' ? 'rent_agreement_url' : 'police_verification_url';
       const { error } = await supabase.from('tenants').update({
-        [updateField]: urlData.publicUrl,
+        [updateField]: `php://${saved.id}`,
       }).eq('id', tenant.id);
       if (error) throw error;
     },

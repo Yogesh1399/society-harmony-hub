@@ -19,7 +19,7 @@ import { RegisterFilters } from '@/components/registers/RegisterFilters';
 import { SortableHeader } from '@/components/registers/SortableHeader';
 import { RegisterPagination } from '@/components/registers/RegisterPagination';
 import { useRegisterFilters } from '@/hooks/useRegisterFilters';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/db-types';
 
 type ExpenseEntry = Database['public']['Tables']['expense_entries']['Row'] & {
   expense_heads?: Database['public']['Tables']['expense_heads']['Row'] | null;

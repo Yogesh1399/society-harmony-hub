@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getFinancialYear } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -30,7 +31,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/db-types';
 
 const societySchema = z.object({
   name: z.string().min(1, 'Society name is required'),
@@ -44,7 +45,7 @@ const societySchema = z.object({
   bank_name: z.string().optional(),
   bank_account: z.string().optional(),
   bank_ifsc: z.string().optional(),
-  financial_year: z.string().default('2024-25'),
+  financial_year: z.string().default(getFinancialYear()),
   package_type: z.enum(['basic', 'standard', 'professional'] as const).default('basic'),
   admin_email: z.string().email('Valid email required').optional().or(z.literal('')),
 });
@@ -84,7 +85,7 @@ export default function SocietyRegistration() {
       bank_name: '',
       bank_account: '',
       bank_ifsc: '',
-      financial_year: '2024-25',
+      financial_year: getFinancialYear(),
       package_type: 'basic',
       admin_email: '',
     },
@@ -350,7 +351,7 @@ export default function SocietyRegistration() {
                   <FormField control={form.control} name="financial_year" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Financial Year</FormLabel>
-                      <FormControl><Input placeholder="e.g. 2024-25" className="h-12" {...field} /></FormControl>
+                      <FormControl><Input placeholder="e.g. 2026-27" className="h-12" {...field} /></FormControl>
                     </FormItem>
                   )} />
                 </div>

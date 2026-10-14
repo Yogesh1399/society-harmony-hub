@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
@@ -7,13 +7,18 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
 } from 'recharts';
-import { FileText, TrendingUp, TrendingDown, IndianRupee, AlertTriangle } from 'lucide-react';
+import { FileText, TrendingUp, TrendingDown, IndianRupee, AlertTriangle, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { exportToExcel } from '@/lib/excelExport';
 
 const COLORS = [
   'hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))',
@@ -191,15 +196,34 @@ export default function ReportsPage() {
           <TabsTrigger value="statement">Income-Expense</TabsTrigger>
           <TabsTrigger value="outstanding">Outstanding</TabsTrigger>
           <TabsTrigger value="collection">Collection</TabsTrigger>
+          <TabsTrigger value="ledger">Member Ledger</TabsTrigger>
+          <TabsTrigger value="annual">Annual Summary</TabsTrigger>
           <TabsTrigger value="charts">Charts</TabsTrigger>
         </TabsList>
 
         {/* Income-Expense Statement */}
         <TabsContent value="statement">
           <Card>
-            <CardHeader>
-              <CardTitle>Income-Expense Statement</CardTitle>
-              <CardDescription>Summary for the current financial year</CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div>
+                <CardTitle>Income-Expense Statement</CardTitle>
+                <CardDescription>Summary for the current financial year</CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => exportToExcel('income-expense-statement', [
+                  { name: 'Income by Head', columns: ['Head', 'Amount'], rows: incomeByHead.map(i => ({ Head: i.name, Amount: i.value })) },
+                  { name: 'Expense by Head', columns: ['Head', 'Amount'], rows: expenseByHead.map(e => ({ Head: e.name, Amount: e.value })) },
+                  { name: 'Summary', columns: ['Item', 'Amount'], rows: [
+                    { Item: 'Total Income', Amount: totalIncome },
+                    { Item: 'Total Expenses', Amount: totalExpense },
+                    { Item: netSurplus >= 0 ? 'Net Surplus' : 'Net Deficit', Amount: Math.abs(netSurplus) },
+                  ]},
+                ])}
+              >
+                <Download className="mr-2 h-4 w-4" /> Export
+              </Button>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -260,11 +284,37 @@ export default function ReportsPage() {
         {/* Outstanding Report - now using maintenance_bills */}
         <TabsContent value="outstanding">
           <Card>
-            <CardHeader>
-              <CardTitle>Outstanding Maintenance Report</CardTitle>
-              <CardDescription>
-                {maintenanceBills?.length || 0} pending bills • Total outstanding: {formatCurrency(totalOutstanding)}
-              </CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div>
+                <CardTitle>Outstanding Maintenance Report</CardTitle>
+                <CardDescription>
+                  {maintenanceBills?.length || 0} pending bills • Total outstanding: {formatCurrency(totalOutstanding)}
+                </CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!maintenanceBills?.length}
+                onClick={() => exportToExcel('outstanding-dues', {
+                  name: 'Outstanding',
+                  columns: ['Flat', 'Member', 'Bill Month', 'Bill Amount', 'Paid', 'Outstanding', 'Status'],
+                  rows: (maintenanceBills || []).map((bill: any) => {
+                    const billTotal = Number(bill.total_amount) + Number(bill.penalty_amount || 0) + Number(bill.interest_amount || 0);
+                    const outstanding = billTotal - Number(bill.paid_amount || 0);
+                    return {
+                      Flat: `${bill.flats?.wing ? bill.flats.wing + '-' : ''}${bill.flats?.flat_number || ''}`,
+                      Member: bill.members?.full_name || '-',
+                      'Bill Month': bill.bill_month,
+                      'Bill Amount': billTotal,
+                      Paid: Number(bill.paid_amount || 0),
+                      Outstanding: outstanding,
+                      Status: bill.status,
+                    };
+                  }),
+                })}
+              >
+                <Download className="mr-2 h-4 w-4" /> Export
+              </Button>
             </CardHeader>
             <CardContent>
               {maintenanceBills && maintenanceBills.length > 0 ? (
@@ -326,6 +376,20 @@ export default function ReportsPage() {
               <MonthlyCollectionReport societyId={currentSocietyId} />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Member-wise Ledger */}
+        <TabsContent value="ledger">
+          <MemberLedgerReport societyId={currentSocietyId} />
+        </TabsContent>
+
+        {/* Annual Summary */}
+        <TabsContent value="annual">
+          <AnnualSummaryReport
+            incomeEntries={incomeEntries || []}
+            expenseEntries={expenseEntries || []}
+            incomeDetails={incomeDetails || []}
+          />
         </TabsContent>
 
         {/* Charts */}
@@ -444,5 +508,331 @@ function MonthlyCollectionReport({ societyId }: { societyId: string | null }) {
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+// ============================================================
+// Member-wise Ledger Report
+// ============================================================
+function MemberLedgerReport({ societyId }: { societyId: string | null }) {
+  const [memberId, setMemberId] = useState<string>('');
+  const [fromDate, setFromDate] = useState<string>(format(subMonths(new Date(), 12), 'yyyy-MM-dd'));
+  const [toDate, setToDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+
+  const { data: members } = useQuery({
+    queryKey: ['ledger_members', societyId],
+    queryFn: async () => {
+      if (!societyId) return [];
+      const { data } = await supabase
+        .from('members')
+        .select('id, full_name, flats(flat_number, wing)')
+        .eq('society_id', societyId)
+        .eq('is_active', true)
+        .order('full_name');
+      return data || [];
+    },
+    enabled: !!societyId,
+  });
+
+  const { data: ledger } = useQuery({
+    queryKey: ['member_ledger', memberId, fromDate, toDate],
+    queryFn: async () => {
+      if (!memberId) return [];
+      // Income side: receipts paid by this member
+      const { data: incomes } = await supabase
+        .from('income_entries')
+        .select('receipt_number, receipt_date, total_amount, payment_mode, transaction_ref, notes')
+        .eq('member_id', memberId)
+        .eq('is_cancelled', false)
+        .gte('receipt_date', fromDate)
+        .lte('receipt_date', toDate)
+        .order('receipt_date');
+
+      // Bills side: maintenance bills for this member
+      const { data: bills } = await supabase
+        .from('maintenance_bills')
+        .select('bill_month, bill_date, total_amount, paid_amount, penalty_amount, interest_amount, status')
+        .eq('member_id', memberId)
+        .gte('bill_date', fromDate)
+        .lte('bill_date', toDate)
+        .order('bill_date');
+
+      const rows: any[] = [];
+      bills?.forEach(b => {
+        const billTotal = Number(b.total_amount) + Number(b.penalty_amount || 0) + Number(b.interest_amount || 0);
+        rows.push({
+          date: b.bill_date,
+          type: 'Bill',
+          ref: b.bill_month,
+          debit: billTotal,
+          credit: 0,
+          notes: `Maintenance bill ${b.bill_month}`,
+        });
+      });
+      incomes?.forEach(i => {
+        rows.push({
+          date: i.receipt_date,
+          type: 'Receipt',
+          ref: i.receipt_number,
+          debit: 0,
+          credit: Number(i.total_amount),
+          notes: `${i.payment_mode || ''} ${i.transaction_ref || ''} ${i.notes || ''}`.trim(),
+        });
+      });
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+
+      // Running balance (debit - credit) cumulatively
+      let bal = 0;
+      return rows.map(r => {
+        bal += r.debit - r.credit;
+        return { ...r, balance: bal };
+      });
+    },
+    enabled: !!memberId,
+  });
+
+  const totalDebit = ledger?.reduce((s, r) => s + r.debit, 0) || 0;
+  const totalCredit = ledger?.reduce((s, r) => s + r.credit, 0) || 0;
+  const closingBalance = totalDebit - totalCredit;
+  const selectedMember = members?.find(m => m.id === memberId);
+  const flatLabel = selectedMember?.flats
+    ? `${(selectedMember.flats as any).wing ? (selectedMember.flats as any).wing + '-' : ''}${(selectedMember.flats as any).flat_number}`
+    : '';
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>Member-wise Ledger</CardTitle>
+          <CardDescription>All bills and payments for a selected member</CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!ledger?.length}
+          onClick={() => exportToExcel(`ledger-${selectedMember?.full_name || 'member'}`, {
+            name: 'Ledger',
+            columns: ['Date', 'Type', 'Reference', 'Debit', 'Credit', 'Balance', 'Notes'],
+            rows: (ledger || []).map(r => ({
+              Date: r.date,
+              Type: r.type,
+              Reference: r.ref,
+              Debit: r.debit,
+              Credit: r.credit,
+              Balance: r.balance,
+              Notes: r.notes,
+            })),
+          })}
+        >
+          <Download className="mr-2 h-4 w-4" /> Export
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <Label>Member</Label>
+            <Select value={memberId} onValueChange={setMemberId}>
+              <SelectTrigger><SelectValue placeholder="Select a member" /></SelectTrigger>
+              <SelectContent>
+                {members?.map(m => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.full_name}{(m.flats as any)?.flat_number ? ` (${(m.flats as any).wing ? (m.flats as any).wing + '-' : ''}${(m.flats as any).flat_number})` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>From</Label>
+            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} />
+          </div>
+          <div>
+            <Label>To</Label>
+            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
+          </div>
+        </div>
+
+        {!memberId ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <FileText className="mx-auto h-12 w-12 opacity-40" />
+            <p className="mt-2">Select a member to view their ledger</p>
+          </div>
+        ) : !ledger?.length ? (
+          <div className="text-center py-12 text-muted-foreground">No transactions in selected range</div>
+        ) : (
+          <>
+            <div className="text-sm text-muted-foreground">
+              {selectedMember?.full_name} {flatLabel && `• ${flatLabel}`} • {ledger.length} transactions
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Reference</TableHead>
+                  <TableHead className="text-right">Debit</TableHead>
+                  <TableHead className="text-right">Credit</TableHead>
+                  <TableHead className="text-right">Balance</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ledger.map((r, i) => (
+                  <TableRow key={i}>
+                    <TableCell>{format(new Date(r.date), 'dd MMM yyyy')}</TableCell>
+                    <TableCell><Badge variant={r.type === 'Bill' ? 'outline' : 'default'}>{r.type}</Badge></TableCell>
+                    <TableCell className="font-mono text-xs">{r.ref}</TableCell>
+                    <TableCell className="text-right">{r.debit > 0 ? formatCurrency(r.debit) : '-'}</TableCell>
+                    <TableCell className="text-right text-primary">{r.credit > 0 ? formatCurrency(r.credit) : '-'}</TableCell>
+                    <TableCell className={`text-right font-medium ${r.balance > 0 ? 'text-destructive' : 'text-foreground'}`}>
+                      {formatCurrency(Math.abs(r.balance))} {r.balance > 0 ? 'Dr' : r.balance < 0 ? 'Cr' : ''}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <div className={`p-4 rounded-lg flex justify-between items-center ${closingBalance > 0 ? 'bg-destructive/5' : 'bg-primary/5'}`}>
+              <div className="text-sm">
+                <div>Total Debit (Bills): <span className="font-semibold">{formatCurrency(totalDebit)}</span></div>
+                <div>Total Credit (Payments): <span className="font-semibold">{formatCurrency(totalCredit)}</span></div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-muted-foreground">Closing Balance</div>
+                <div className={`text-xl font-bold ${closingBalance > 0 ? 'text-destructive' : 'text-primary'}`}>
+                  {formatCurrency(Math.abs(closingBalance))} {closingBalance > 0 ? 'Dr' : 'Cr'}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============================================================
+// Annual Summary Report
+// ============================================================
+function AnnualSummaryReport({ incomeEntries, expenseEntries, incomeDetails }: { incomeEntries: any[]; expenseEntries: any[]; incomeDetails: any[] }) {
+  const [year, setYear] = useState<number>(new Date().getFullYear());
+
+  const yearStart = useMemo(() => new Date(year, 0, 1), [year]);
+  const yearEnd = useMemo(() => new Date(year, 11, 31, 23, 59, 59), [year]);
+
+  // Per-month income/expense
+  const monthly = useMemo(() => {
+    const months: { name: string; income: number; expense: number }[] = [];
+    for (let m = 0; m < 12; m++) {
+      const ms = new Date(year, m, 1);
+      const me = new Date(year, m + 1, 0, 23, 59, 59);
+      const inc = incomeEntries.filter(e => {
+        const d = new Date(e.receipt_date);
+        return d >= ms && d <= me;
+      }).reduce((s, e) => s + Number(e.total_amount), 0);
+      const exp = expenseEntries.filter(e => {
+        const d = new Date(e.voucher_date);
+        return d >= ms && d <= me;
+      }).reduce((s, e) => s + Number(e.net_amount), 0);
+      months.push({ name: format(ms, 'MMM'), income: inc, expense: exp });
+    }
+    return months;
+  }, [year, incomeEntries, expenseEntries]);
+
+  // Income by head (for the year)
+  const incomeByHeadAnnual = useMemo(() => {
+    const map: Record<string, number> = {};
+    incomeDetails.forEach(d => {
+      const ie = (d.income_entries as any);
+      if (!ie) return;
+      // ie has society_id + is_cancelled but not date (we used !inner to filter); rely on parent join not available here.
+      // Use the linked income_entry's date by re-querying — but we keep simple: include all from already-filtered set.
+      const head = (d.income_heads as any)?.head_name || 'Other';
+      map[head] = (map[head] || 0) + Number(d.amount);
+    });
+    return Object.entries(map).map(([name, value]) => ({ name, value }));
+  }, [incomeDetails]);
+
+  const expenseByHeadAnnual = useMemo(() => {
+    const map: Record<string, number> = {};
+    expenseEntries
+      .filter(e => {
+        const d = new Date(e.voucher_date);
+        return d >= yearStart && d <= yearEnd;
+      })
+      .forEach(e => {
+        const head = (e.expense_heads as any)?.head_name || 'Other';
+        map[head] = (map[head] || 0) + Number(e.net_amount);
+      });
+    return Object.entries(map).map(([name, value]) => ({ name, value }));
+  }, [expenseEntries, yearStart, yearEnd]);
+
+  const totalIncome = monthly.reduce((s, m) => s + m.income, 0);
+  const totalExpense = monthly.reduce((s, m) => s + m.expense, 0);
+  const surplus = totalIncome - totalExpense;
+
+  const yearOptions = Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>Annual Summary</CardTitle>
+          <CardDescription>Calendar year breakdown of income and expenses</CardDescription>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={String(year)} onValueChange={v => setYear(Number(v))}>
+            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {yearOptions.map(y => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => exportToExcel(`annual-summary-${year}`, [
+              { name: 'Monthly', columns: ['Month', 'Income', 'Expense', 'Net'], rows: monthly.map(m => ({ Month: m.name, Income: m.income, Expense: m.expense, Net: m.income - m.expense })) },
+              { name: 'Income by Head', columns: ['Head', 'Amount'], rows: incomeByHeadAnnual.map(r => ({ Head: r.name, Amount: r.value })) },
+              { name: 'Expense by Head', columns: ['Head', 'Amount'], rows: expenseByHeadAnnual.map(r => ({ Head: r.name, Amount: r.value })) },
+              { name: 'Summary', columns: ['Item', 'Amount'], rows: [
+                { Item: 'Total Income', Amount: totalIncome },
+                { Item: 'Total Expense', Amount: totalExpense },
+                { Item: surplus >= 0 ? 'Net Surplus' : 'Net Deficit', Amount: Math.abs(surplus) },
+              ]},
+            ])}
+          >
+            <Download className="mr-2 h-4 w-4" /> Export
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Month</TableHead>
+              <TableHead className="text-right">Income</TableHead>
+              <TableHead className="text-right">Expense</TableHead>
+              <TableHead className="text-right">Net</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {monthly.map(m => (
+              <TableRow key={m.name}>
+                <TableCell className="font-medium">{m.name} {year}</TableCell>
+                <TableCell className="text-right text-primary">{formatCurrency(m.income)}</TableCell>
+                <TableCell className="text-right text-destructive">{formatCurrency(m.expense)}</TableCell>
+                <TableCell className={`text-right font-semibold ${(m.income - m.expense) >= 0 ? 'text-primary' : 'text-destructive'}`}>
+                  {formatCurrency(m.income - m.expense)}
+                </TableCell>
+              </TableRow>
+            ))}
+            <TableRow className="bg-muted/40 font-bold">
+              <TableCell>Total</TableCell>
+              <TableCell className="text-right">{formatCurrency(totalIncome)}</TableCell>
+              <TableCell className="text-right">{formatCurrency(totalExpense)}</TableCell>
+              <TableCell className={`text-right ${surplus >= 0 ? 'text-primary' : 'text-destructive'}`}>{formatCurrency(surplus)}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }

@@ -20,7 +20,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/db-types';
 
 type ComplaintStatus = Database['public']['Enums']['complaint_status'];
 

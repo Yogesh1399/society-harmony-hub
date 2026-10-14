@@ -19,8 +19,8 @@ interface Props {
 export function TenantDetailDialog({ tenant, open, onOpenChange }: Props) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { hasRole, user } = useAuthStore();
-  const isAdmin = hasRole('society_admin') || hasRole('super_admin');
+  const { hasRole, user, isAdmin: isAdminFn } = useAuthStore();
+  const isAdmin = isAdminFn();
 
   // Owner confirms tenant (step 1 → step 2)
   const ownerVerifyMutation = useMutation({

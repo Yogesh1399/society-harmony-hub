@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
-import { Plus, Users, Search, Edit, Trash2, MoreHorizontal, Phone, Mail, Home, KeyRound } from 'lucide-react';
+import { Plus, Users, Search, Edit, Trash2, MoreHorizontal, Phone, Mail, Home, KeyRound, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -32,7 +32,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { MemberForm } from '@/components/members/MemberForm';
-import type { Database } from '@/integrations/supabase/types';
+import { MembersBulkUpload } from '@/components/members/MembersBulkUpload';
+import type { Database } from '@/integrations/supabase/db-types';
 
 type Member = Database['public']['Tables']['members']['Row'] & {
   flats?: Database['public']['Tables']['flats']['Row'] | null;
@@ -44,6 +45,7 @@ export default function MembersPage() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isBulkOpen, setIsBulkOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
 
@@ -145,10 +147,16 @@ export default function MembersPage() {
           <h1 className="text-2xl font-bold text-foreground">Members Directory</h1>
           <p className="text-muted-foreground">Manage flat owners and their details</p>
         </div>
-        <Button onClick={() => setIsFormOpen(true)} className="touch-target">
-          <Plus className="mr-2 h-4 w-4" />
-          Add Member
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsBulkOpen(true)} className="touch-target">
+            <Upload className="mr-2 h-4 w-4" />
+            Bulk Upload
+          </Button>
+          <Button onClick={() => setIsFormOpen(true)} className="touch-target">
+            <Plus className="mr-2 h-4 w-4" />
+            Add Member
+          </Button>
+        </div>
       </div>
 
       {/* Search */}
@@ -392,6 +400,9 @@ export default function MembersPage() {
           <MemberForm member={selectedMember} onClose={handleFormClose} />
         </DialogContent>
       </Dialog>
+
+      {/* Bulk Upload Dialog */}
+      <MembersBulkUpload open={isBulkOpen} onOpenChange={setIsBulkOpen} />
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>

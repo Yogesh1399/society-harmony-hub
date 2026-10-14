@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadPrivateFile } from '@/lib/fileStorage';
 import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -95,13 +96,16 @@ export function TenantForm({ tenant, onClose }: Props) {
     },
   });
 
-  const uploadFile = async (file: File, path: string) => {
-    const { data, error } = await supabase.storage
-      .from('tenant-documents')
-      .upload(path, file, { upsert: true });
-    if (error) throw error;
-    const { data: urlData } = supabase.storage.from('tenant-documents').getPublicUrl(data.path);
-    return urlData.publicUrl;
+  // Rent agreements and police verifications are personal ID documents.
+  // They go to private Hostinger storage, never to a public bucket.
+  const uploadFile = async (file: File, _path: string, entityId?: string) => {
+    const saved = await uploadPrivateFile({
+      file,
+      societyId: currentSocietyId!,
+      category: 'tenant_docs',
+      entityId,
+    });
+    return `php://${saved.id}`;
   };
 
   const mutation = useMutation({
@@ -120,10 +124,10 @@ export function TenantForm({ tenant, onClose }: Props) {
       const tenantId = tenant?.id || crypto.randomUUID();
 
       if (rentAgreementFile) {
-        rentAgreementUrl = await uploadFile(rentAgreementFile, `${currentSocietyId}/${tenantId}/rent-agreement-${Date.now()}`);
+        rentAgreementUrl = await uploadFile(rentAgreementFile, '', tenantId);
       }
       if (policeVerificationFile) {
-        policeVerificationUrl = await uploadFile(policeVerificationFile, `${currentSocietyId}/${tenantId}/police-verification-${Date.now()}`);
+        policeVerificationUrl = await uploadFile(policeVerificationFile, '', tenantId);
       }
 
       const payload = {

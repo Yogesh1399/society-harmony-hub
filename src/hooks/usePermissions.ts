@@ -22,8 +22,10 @@ export function usePermissions() {
         .select(`
           id, user_id, group_id, society_id,
           additional_permissions, restricted_permissions,
-          permission_groups(name),
-          group_permissions:group_permissions(module, can_view, can_create, can_edit, can_delete, can_approve)
+          permission_groups!inner (
+            name,
+            group_permissions ( module, can_view, can_create, can_edit, can_delete, can_approve )
+          )
         `)
         .eq('user_id', user.id)
         .eq('society_id', currentSocietyId);
@@ -48,7 +50,9 @@ export function usePermissions() {
 
   if (assignments) {
     for (const assignment of assignments) {
-      const groupPerms = (assignment as any).group_permissions || [];
+      // Permissions live one level down: assignment -> permission_groups -> group_permissions
+      const groupPerms =
+        (assignment as any).permission_groups?.group_permissions || [];
       const additional = (assignment.additional_permissions as any[]) || [];
       const restricted = (assignment.restricted_permissions as any[]) || [];
 

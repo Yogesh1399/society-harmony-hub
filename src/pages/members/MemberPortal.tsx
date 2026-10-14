@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadPrivateFile } from '@/lib/fileStorage';
 import { useAuthStore } from '@/stores/authStore';
 import { format, differenceInYears } from 'date-fns';
 import {
@@ -189,11 +190,13 @@ export default function MemberPortal() {
   // ── Upload photo ────────────────────────────────────────────────────────────
   const uploadPhotoMutation = useMutation({
     mutationFn: async (file: File) => {
-      const ext = file.name.split('.').pop();
-      const path = `member-photos/${primaryMember!.id}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('profile-photos').upload(path, file, { upsert: true });
-      if (upErr) throw upErr;
-      const { data: { publicUrl } } = supabase.storage.from('profile-photos').getPublicUrl(path);
+      const saved = await uploadPrivateFile({
+        file,
+        societyId: currentSocietyId!,
+        category: 'Member Photo',
+        entityId: primaryMember!.id,
+      });
+      const publicUrl = `php://${saved.id}`;
       const { error: updateErr } = await supabase.from('members').update({ photo_url: publicUrl }).eq('id', primaryMember!.id);
       if (updateErr) throw updateErr;
       // Also update profile
@@ -209,12 +212,13 @@ export default function MemberPortal() {
     mutationFn: async () => {
       let photoUrl = editFamilyMember?.photo_url || '';
       if (familyPhotoFile) {
-        const ext = familyPhotoFile.name.split('.').pop();
-        const path = `family-photos/${primaryMember!.id}/${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage.from('profile-photos').upload(path, familyPhotoFile, { upsert: true });
-        if (upErr) throw upErr;
-        const { data: { publicUrl } } = supabase.storage.from('profile-photos').getPublicUrl(path);
-        photoUrl = publicUrl;
+        const saved = await uploadPrivateFile({
+          file: familyPhotoFile,
+          societyId: currentSocietyId!,
+          category: 'Family Member Photo',
+          entityId: primaryMember!.id,
+        });
+        photoUrl = `php://${saved.id}`;
       }
       const payload = { ...familyForm, member_id: primaryMember!.id, photo_url: photoUrl || null, date_of_birth: familyForm.date_of_birth || null };
       if (editFamilyMember) {
@@ -261,11 +265,13 @@ export default function MemberPortal() {
       if (!targetFlatId) throw new Error('No flat assigned');
 
       const file = payForm.attachment_file;
-      const ext = file.name.split('.').pop();
-      const filename = `payment-proofs/${primaryMember.id}/${Date.now()}.${ext}`;
-      const { error: uploadErr } = await supabase.storage.from('documents').upload(filename, file, { upsert: true });
-      if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`);
-      const { data: { publicUrl } } = supabase.storage.from('documents').getPublicUrl(filename);
+      const savedProof = await uploadPrivateFile({
+        file,
+        societyId: currentSocietyId!,
+        category: 'Payment Proof',
+        entityId: primaryMember.id,
+      });
+      const publicUrl = `php://${savedProof.id}`;
 
       // If multiple flats selected, create one submission per flat
       const flatIds = selectedFlatIds.length > 0 ? selectedFlatIds : [targetFlatId];
@@ -748,7 +754,7 @@ export default function MemberPortal() {
         <TabsContent value="complaints">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <div><CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />My Complaints</CardTitle></CardHeader>
+              <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />My Complaints</CardTitle>
             </CardHeader>
             <CardContent>
               {myComplaints?.length ? (

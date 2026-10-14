@@ -14,16 +14,45 @@ import { SidebarTrigger } from '@/components/ui/sidebar';
 import { useAuthStore } from '@/stores/authStore';
 import { useSocietyStore } from '@/stores/societyStore';
 import { Badge } from '@/components/ui/badge';
+import { useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 
 interface AppHeaderProps {
   title?: string;
 }
 
 export function AppHeader({ title }: AppHeaderProps) {
-  const { profile, getCurrentRole } = useAuthStore();
-  const { currentSociety, societies } = useSocietyStore();
-  
+  const { profile, getCurrentRole, setCurrentSocietyId } = useAuthStore();
+  const { currentSociety, societies, setCurrentSociety, setFeatures } = useSocietyStore();
+  const queryClient = useQueryClient();
+
   const currentRole = getCurrentRole();
+
+  // Switching society must also reload that society's feature flags and
+  // drop every cached query, otherwise the previous society's data stays
+  // on screen for as long as it remains fresh.
+  const handleSwitchSociety = async (society: typeof societies[number]) => {
+    if (society.id === currentSociety?.id) return;
+
+    setCurrentSocietyId(society.id);
+    setCurrentSociety(society);
+
+    const { data: features, error } = await supabase
+      .from('feature_settings')
+      .select('*')
+      .eq('society_id', society.id)
+      .maybeSingle();
+
+    if (error) {
+      toast.error('Could not load settings for this society.');
+    } else {
+      setFeatures(features ?? null);
+    }
+
+    await queryClient.invalidateQueries();
+    toast.success(`Switched to ${society.name}`);
+  };
 
   return (
     <header className="sticky top-0 z-40 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6">
@@ -63,6 +92,7 @@ export function AppHeader({ title }: AppHeaderProps) {
               {societies.map((society) => (
                 <DropdownMenuItem
                   key={society.id}
+                  onClick={() => handleSwitchSociety(society)}
                   className={society.id === currentSociety?.id ? 'bg-accent' : ''}
                 >
                   {society.name}

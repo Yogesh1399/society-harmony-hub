@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -14,7 +15,8 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/db-types';
+import { FileUploadField, type AttachedFile } from '@/components/common/FileUploadField';
 
 type Member = Database['public']['Tables']['members']['Row'];
 
@@ -39,6 +41,9 @@ export function MemberForm({ member, onClose }: MemberFormProps) {
   const { currentSocietyId } = useAuthStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [photoFiles, setPhotoFiles] = useState<AttachedFile[]>([]);
+  const [memberDocs, setMemberDocs] = useState<AttachedFile[]>([]);
+
 
   // Fetch unassigned flats + current member's flat when editing
   const { data: flats } = useQuery({
@@ -92,6 +97,9 @@ export function MemberForm({ member, onClose }: MemberFormProps) {
         pan_masked: values.pan_masked || null,
         is_active: values.is_active,
         society_id: currentSocietyId,
+        // Uploads happen immediately on selection, so these are already stored
+        ...(photoFiles.length ? { photo_url: photoFiles[0].marker } : {}),
+        ...(memberDocs.length ? { share_certificate_url: memberDocs[0].marker } : {}),
       };
 
       if (member) {
@@ -218,6 +226,31 @@ export function MemberForm({ member, onClose }: MemberFormProps) {
               <FormMessage />
             </FormItem>
           )} />
+        </div>
+
+        <div className="space-y-4 rounded-lg border p-4">
+          <FileUploadField
+            label="Member Photo"
+            description="JPG, PNG or WEBP · up to 10 MB"
+            accept=".jpg,.jpeg,.png,.webp"
+            category="Member Photo"
+            societyId={currentSocietyId || ''}
+            entityId={member?.id}
+            value={photoFiles}
+            onChange={setPhotoFiles}
+          />
+
+          <FileUploadField
+            label="Member Documents"
+            description="Share certificate, sale deed, Index-2, ID proof · PDF or image"
+            category="Member Document"
+            societyId={currentSocietyId || ''}
+            entityId={member?.id}
+            multiple
+            maxFiles={5}
+            value={memberDocs}
+            onChange={setMemberDocs}
+          />
         </div>
 
         <FormField

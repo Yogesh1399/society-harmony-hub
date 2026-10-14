@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { getFinancialYear } from '@/lib/utils';
+import { FileUploadField, type AttachedFile } from '@/components/common/FileUploadField';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -26,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { useCommitteeRole } from '@/hooks/useCommitteeRole';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ShieldAlert } from 'lucide-react';
+import { SearchableCombobox } from '@/components/ui/searchable-combobox';
 
 const expenseSchema = z.object({
   voucher_date: z.date(),
@@ -55,6 +58,8 @@ export function ExpenseForm({ onClose }: ExpenseFormProps) {
   const { currentSocietyId, user } = useAuthStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [billFiles, setBillFiles] = useState<AttachedFile[]>([]);
+
   const { role: committeeRole, isTreasurer, isChairman, isSecretary } = useCommitteeRole();
   // Only the Treasurer (and not also Chairman/Secretary/Admin) needs approval
   const requiresApproval = isTreasurer && !isChairman && !isSecretary;
@@ -70,6 +75,21 @@ export function ExpenseForm({ onClose }: ExpenseFormProps) {
         .eq('is_active', true)
         .order('head_name');
       if (error) throw error;
+      return data || [];
+    },
+    enabled: !!currentSocietyId,
+  });
+
+  const { data: vendors } = useQuery({
+    queryKey: ['vendors-for-expense', currentSocietyId],
+    queryFn: async () => {
+      if (!currentSocietyId) return [];
+      const { data } = await supabase
+        .from('vendors')
+        .select('id, vendor_name, mobile, email, services_provided')
+        .eq('society_id', currentSocietyId)
+        .eq('is_active', true)
+        .order('vendor_name');
       return data || [];
     },
     enabled: !!currentSocietyId,
@@ -111,25 +131,19 @@ export function ExpenseForm({ onClose }: ExpenseFormProps) {
         _society_id: currentSocietyId,
         _doc_type: 'expense',
       });
-      if (!error && data) return data as string;
-    } catch {}
-    // Fallback to legacy
-    const financialYear = '2024-25';
-    const { data: series } = await supabase
-      .from('receipt_series')
-      .select('*')
-      .eq('society_id', currentSocietyId)
-      .eq('receipt_type', 'expense')
-      .eq('financial_year', financialYear)
-      .single();
-    if (!series) {
-      await supabase.from('receipt_series').insert({
-        society_id: currentSocietyId, receipt_type: 'expense', financial_year: financialYear, prefix: 'VCH', current_number: 0,
-      });
-      return `VCH/${financialYear}/001`;
+      if (error) throw error;
+      if (!data) throw new Error('Voucher number could not be generated.');
+      return data as string;
+    } catch (err: any) {
+      // No unsafe fallback here on purpose — see IncomeForm for the reason.
+      const msg = String(err?.message || err);
+      if (/fiscal year/i.test(msg)) {
+        throw new Error(
+          'No open financial year for this society. Open the new financial year in Settings before adding entries.'
+        );
+      }
+      throw new Error(`Could not generate a voucher number: ${msg}`);
     }
-    const nextNumber = (series.current_number || 0) + 1;
-    return `${series.prefix}/${financialYear}/${String(nextNumber).padStart(3, '0')}`;
   };
 
   const mutation = useMutation({
@@ -150,6 +164,7 @@ export function ExpenseForm({ onClose }: ExpenseFormProps) {
         .from('expense_entries')
         .insert({
           society_id: currentSocietyId,
+          ...(billFiles.length ? { invoice_url: billFiles[0].marker } : {}),
           voucher_number: voucherNumber,
           voucher_date: format(values.voucher_date, 'yyyy-MM-dd'),
           expense_head_id: values.expense_head_id,
@@ -177,7 +192,7 @@ export function ExpenseForm({ onClose }: ExpenseFormProps) {
 
       // Legacy receipt series update (kept for backward compatibility)
       try {
-        const financialYear = '2024-25';
+        const financialYear = getFinancialYear(values.voucher_date);
         const { data: currentSeries } = await supabase
           .from('receipt_series').select('current_number')
           .eq('society_id', currentSocietyId).eq('receipt_type', 'expense').eq('financial_year', financialYear).single();
@@ -281,52 +296,25 @@ export function ExpenseForm({ onClose }: ExpenseFormProps) {
             control={form.control}
             name="vendor_name"
             render={({ field }) => {
-              const [vendorSearch, setVendorSearch] = useState('');
-              const { data: vendors } = useQuery({
-                queryKey: ['vendors-for-expense', currentSocietyId],
-                queryFn: async () => {
-                  const { data } = await supabase.from('vendors').select('id, vendor_name, mobile, email, services_provided').eq('society_id', currentSocietyId!).eq('is_active', true).order('vendor_name');
-                  return data || [];
-                },
-                enabled: !!currentSocietyId,
-              });
-              const filtered = vendors?.filter(v => v.vendor_name.toLowerCase().includes(vendorSearch.toLowerCase())) || [];
+              const vendorOptions = (vendors || []).map((v) => ({
+                value: v.vendor_name,
+                label: v.vendor_name,
+                hint: v.mobile || undefined,
+                searchText: `${v.vendor_name} ${v.mobile || ''} ${v.email || ''}`,
+              }));
               return (
                 <FormItem>
                   <FormLabel>Vendor / Payee *</FormLabel>
-                  <Select onValueChange={(val) => {
-                    const v = vendors?.find(v => v.vendor_name === val);
-                    field.onChange(val);
-                  }} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger className="h-12">
-                        <SelectValue placeholder="Search or type vendor name" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <div className="p-2 border-b">
-                        <Input
-                          placeholder="Search vendors..."
-                          value={vendorSearch}
-                          onChange={e => { setVendorSearch(e.target.value); if (!vendors?.find(v => v.vendor_name.toLowerCase() === e.target.value.toLowerCase())) field.onChange(e.target.value); }}
-                          className="h-8"
-                          onKeyDown={e => e.stopPropagation()}
-                        />
-                      </div>
-                      {filtered.length === 0 && vendorSearch && (
-                        <div className="p-3 text-center">
-                          <p className="text-sm text-muted-foreground mb-2">"{vendorSearch}" not in vendor list</p>
-                          <Button type="button" size="sm" variant="outline" onClick={() => { field.onChange(vendorSearch); }}>Use as vendor name</Button>
-                        </div>
-                      )}
-                      {filtered.map((v) => (
-                        <SelectItem key={v.id} value={v.vendor_name}>
-                          <span className="font-medium">{v.vendor_name}</span>
-                          {v.mobile && <span className="text-xs text-muted-foreground ml-2">· {v.mobile}</span>}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableCombobox
+                    options={vendorOptions}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Search or type vendor name"
+                    searchPlaceholder="Search vendors..."
+                    emptyText="No vendor found"
+                    allowFreeText
+                    freeTextLabel={(v) => v}
+                  />
                   <p className="text-xs text-muted-foreground mt-1">
                     <a href="/settings" className="text-primary underline">+ Add vendor to master list</a> for future use
                   </p>
@@ -553,7 +541,19 @@ export function ExpenseForm({ onClose }: ExpenseFormProps) {
         </div>
 
         {/* Actions */}
-        <div className="flex gap-3 pt-4">
+                  <FileUploadField
+            label="Bill / Invoice / Evidence"
+            description="Attach the vendor bill, receipt, UPI screenshot or any supporting proof"
+            category="Expense Bill"
+            societyId={currentSocietyId || ''}
+            multiple
+            maxFiles={5}
+            value={billFiles}
+            onChange={setBillFiles}
+            className="mb-4"
+          />
+
+          <div className="flex gap-3 pt-4">
           <Button type="button" variant="outline" onClick={onClose} className="flex-1 h-12">Cancel</Button>
           <Button type="submit" className="flex-1 h-12" disabled={mutation.isPending}>
             {mutation.isPending ? 'Saving...' : 'Generate Voucher'}

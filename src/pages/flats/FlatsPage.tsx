@@ -31,7 +31,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { FlatForm } from '@/components/flats/FlatForm';
-import type { Database } from '@/integrations/supabase/types';
+import type { Database } from '@/integrations/supabase/db-types';
 
 type Flat = Database['public']['Tables']['flats']['Row'];
 type FlatStatus = Database['public']['Enums']['flat_status'];

@@ -3,6 +3,7 @@ import { SidebarProvider } from '@/components/ui/sidebar';
 import { AppSidebar } from './AppSidebar';
 import { AppHeader } from './AppHeader';
 import { MobileNav } from './MobileNav';
+import { PermissionsDebugPanel } from '@/components/dev/PermissionsDebugPanel';
 
 interface AppLayoutProps {
   title?: string;
@@ -29,6 +30,7 @@ export function AppLayout({ title }: AppLayoutProps) {
           <MobileNav />
         </div>
       </div>
+      <PermissionsDebugPanel />
     </SidebarProvider>
   );
 }

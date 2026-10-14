@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadPrivateFile } from '@/lib/fileStorage';
 import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { Upload, X } from 'lucide-react';
 
 const complaintSchema = z.object({
   title: z.string().min(1, 'Title is required'),
@@ -29,6 +32,7 @@ export function ComplaintForm({ onClose }: { onClose: () => void }) {
   const { currentSocietyId, user } = useAuthStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [photos, setPhotos] = useState<File[]>([]);
 
   const { data: flats } = useQuery({
     queryKey: ['flats', currentSocietyId],
@@ -45,10 +49,28 @@ export function ComplaintForm({ onClose }: { onClose: () => void }) {
     defaultValues: { title: '', description: '', category: '', flat_id: '', priority: 'medium' },
   });
 
+  // Photos go to private Hostinger storage, not a public bucket.
+  const uploadPhotos = async (complaintId: string) => {
+    const urls: string[] = [];
+    for (const file of photos) {
+      const saved = await uploadPrivateFile({
+        file,
+        societyId: currentSocietyId!,
+        category: 'Complaint Photo',
+        entityId: complaintId,
+      });
+      urls.push(`php://${saved.id}`);
+    }
+    return urls;
+  };
+
   const mutation = useMutation({
     mutationFn: async (values: ComplaintFormValues) => {
       if (!currentSocietyId) throw new Error('No society selected');
+      const complaintId = crypto.randomUUID();
+      const photoUrls = photos.length ? await uploadPhotos(complaintId) : [];
       const { error } = await supabase.from('complaints').insert({
+        id: complaintId,
         society_id: currentSocietyId,
         title: values.title,
         description: values.description || null,
@@ -57,6 +79,7 @@ export function ComplaintForm({ onClose }: { onClose: () => void }) {
         priority: values.priority,
         raised_by: user?.id || null,
         status: 'open',
+        photo_urls: photoUrls.length ? photoUrls : null,
       });
       if (error) throw error;
     },
@@ -143,6 +166,39 @@ export function ComplaintForm({ onClose }: { onClose: () => void }) {
             <FormMessage />
           </FormItem>
         )} />
+        <div>
+          <label className="text-sm font-medium">Photos (optional)</label>
+          <div className="mt-1">
+            <label className="flex items-center gap-2 cursor-pointer border border-input rounded-md px-3 py-2 text-sm hover:bg-accent w-fit">
+              <Upload className="h-4 w-4" />
+              Add photos
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => setPhotos((prev) => [...prev, ...Array.from(e.target.files || [])])}
+              />
+            </label>
+          </div>
+          {photos.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {photos.map((f, i) => (
+                <div key={i} className="flex items-center gap-1 text-xs bg-accent rounded px-2 py-1">
+                  <span className="truncate max-w-[160px]">{f.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPhotos((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="text-muted-foreground hover:text-destructive"
+                    aria-label="Remove photo"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="flex gap-3 pt-2">
           <Button type="button" variant="outline" onClick={onClose} className="flex-1 h-12">Cancel</Button>
           <Button type="submit" className="flex-1 h-12" disabled={mutation.isPending}>

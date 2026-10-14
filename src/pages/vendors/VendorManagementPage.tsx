@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadPrivateFile } from '@/lib/fileStorage';
 import { useAuthStore } from '@/stores/authStore';
 import { format } from 'date-fns';
 import { Plus, Search, Edit, Trash2, Building2, Phone, Mail, AlertTriangle, FileText } from 'lucide-react';
@@ -44,12 +45,12 @@ export default function VendorManagementPage() {
       if(!form.vendor_name)throw new Error('Vendor name required');
       let contractUrl=editVendor?.contract_document_url||null;
       if(contractFile){
-        const ext=contractFile.name.split('.').pop();
-        const path=`vendor-contracts/${currentSocietyId}/${Date.now()}.${ext}`;
-        const{error:upErr}=await supabase.storage.from('documents').upload(path,contractFile,{upsert:true});
-        if(upErr)throw upErr;
-        const{data:{publicUrl}}=supabase.storage.from('documents').getPublicUrl(path);
-        contractUrl=publicUrl;
+        const saved = await uploadPrivateFile({
+          file: contractFile,
+          societyId: currentSocietyId!,
+          category: 'Vendor Contract',
+        });
+        contractUrl = `php://${saved.id}`;
       }
       const payload={...form,society_id:currentSocietyId,contract_amount:form.contract_amount?Number(form.contract_amount):null,contract_start_date:form.contract_start_date||null,contract_end_date:form.contract_end_date||null,contract_document_url:contractUrl};
       if(editVendor){const{error}=await supabase.from('vendors').update(payload).eq('id',editVendor.id);if(error)throw error;}
@@ -117,7 +118,7 @@ export default function VendorManagementPage() {
                 <div><Label>City</Label><Input className="h-11 mt-1" value={form.city} onChange={e=>setForm(f=>({...f,city:e.target.value}))}/></div>
                 <div className="col-span-2"><Label>Address</Label><Textarea className="mt-1" rows={2} value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))}/></div>
               </div>
-              <div><Label>Services</Label><div className="mt-2 grid grid-cols-3 gap-1">{SERVICE_CATEGORIES.map(s=><label key={s} className="flex items-center gap-1 text-xs cursor-pointer"><input type="checkbox" checked={form.services_provided.includes(s)} onChange={e=>setForm(f=>({...f,services_provided:e.target.checked?[...f.services_provided,s]:f.services_provided.filter(x=>x!==s)})}/>{s}</label>)}</div></div>
+              <div><Label>Services</Label><div className="mt-2 grid grid-cols-3 gap-1">{SERVICE_CATEGORIES.map(s=><label key={s} className="flex items-center gap-1 text-xs cursor-pointer"><input type="checkbox" checked={form.services_provided.includes(s)} onChange={e=>setForm(f=>({...f,services_provided:e.target.checked?[...f.services_provided,s]:f.services_provided.filter(x=>x!==s)}))}/>{s}</label>)}</div></div>
             </TabsContent>
             <TabsContent value="financial" className="space-y-3 mt-4">
               <div className="grid grid-cols-2 gap-3">

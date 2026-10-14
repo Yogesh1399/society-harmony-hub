@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadPrivateFile } from '@/lib/fileStorage';
 import { useAuthStore } from '@/stores/authStore';
 import { format } from 'date-fns';
 import {
@@ -179,10 +180,12 @@ export default function BankReconciliationPage() {
       let fileUrl: string | null = null;
       let fileName: string | null = null;
       if (stmt.file) {
-        const path = `${currentSocietyId}/${Date.now()}_${stmt.file.name}`;
-        const { error: upErr } = await supabase.storage.from('bank-statements').upload(path, stmt.file);
-        if (upErr) throw upErr;
-        fileUrl = path;
+        const saved = await uploadPrivateFile({
+          file: stmt.file,
+          societyId: currentSocietyId!,
+          category: 'Bank Statement',
+        });
+        fileUrl = `php://${saved.id}`;
         fileName = stmt.file.name;
       }
 

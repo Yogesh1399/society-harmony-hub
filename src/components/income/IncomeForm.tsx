@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { getFinancialYear } from '@/lib/utils';
+import { FileUploadField, type AttachedFile } from '@/components/common/FileUploadField';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -23,7 +25,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import type { Database } from '@/integrations/supabase/types';
+import { SearchableCombobox } from '@/components/ui/searchable-combobox';
+import type { Database } from '@/integrations/supabase/db-types';
 
 type PaymentMode = Database['public']['Enums']['payment_mode'];
 
@@ -64,6 +67,8 @@ export function IncomeForm({ onClose, prefill }: IncomeFormProps) {
   const { currentSocietyId } = useAuthStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [proofFiles, setProofFiles] = useState<AttachedFile[]>([]);
+
   const [selectedFlatId, setSelectedFlatId] = useState<string>(prefill?.flat_id || '');
 
   // Fetch flats with members
@@ -151,21 +156,21 @@ export function IncomeForm({ onClose, prefill }: IncomeFormProps) {
         _society_id: currentSocietyId,
         _doc_type: 'income',
       });
-      if (!error && data) return data as string;
-    } catch {}
-    // Fallback to legacy receipt_series
-    const financialYear = '2024-25';
-    const { data: series, error } = await supabase
-      .from('receipt_series').select('*')
-      .eq('society_id', currentSocietyId).eq('receipt_type', 'income').eq('financial_year', financialYear).single();
-    if (error || !series) {
-      await supabase.from('receipt_series').insert({
-        society_id: currentSocietyId, receipt_type: 'income', financial_year: financialYear, prefix: 'RCP', current_number: 0,
-      });
-      return `RCP/${financialYear}/001`;
+      if (error) throw error;
+      if (!data) throw new Error('Receipt number could not be generated.');
+      return data as string;
+    } catch (err: any) {
+      // No unsafe fallback here on purpose. The old read-then-write path
+      // could hand the same number to two people saving at once, which then
+      // failed on the unique constraint with a confusing error.
+      const msg = String(err?.message || err);
+      if (/fiscal year/i.test(msg)) {
+        throw new Error(
+          'No open financial year for this society. Open the new financial year in Settings before adding entries.'
+        );
+      }
+      throw new Error(`Could not generate a receipt number: ${msg}`);
     }
-    const nextNumber = (series.current_number || 0) + 1;
-    return `${series.prefix}/${financialYear}/${String(nextNumber).padStart(3, '0')}`;
   };
 
   const mutation = useMutation({
@@ -197,7 +202,10 @@ export function IncomeForm({ onClose, prefill }: IncomeFormProps) {
           bank_name: values.bank_name || null,
           period_from: values.period_from ? format(values.period_from, 'yyyy-MM-dd') : null,
           period_to: values.period_to ? format(values.period_to, 'yyyy-MM-dd') : null,
-          notes: values.notes || null,
+          notes: [
+            values.notes || null,
+            proofFiles.length ? `Evidence: ${proofFiles.map((f) => f.marker).join(' ')}` : null,
+          ].filter(Boolean).join(' | ') || null,
         })
         .select()
         .single();
@@ -218,7 +226,7 @@ export function IncomeForm({ onClose, prefill }: IncomeFormProps) {
 
       // Legacy receipt series update (kept for backward compatibility)
       try {
-        const financialYear = '2024-25';
+        const financialYear = getFinancialYear(values.receipt_date);
         const { data: currentSeries } = await supabase
           .from('receipt_series').select('current_number')
           .eq('society_id', currentSocietyId).eq('receipt_type', 'income').eq('financial_year', financialYear).single();
@@ -314,48 +322,23 @@ export function IncomeForm({ onClose, prefill }: IncomeFormProps) {
             control={form.control}
             name="flat_id"
             render={({ field }) => {
-              const [flatSearch, setFlatSearch] = useState('');
-              const filtered = flatsWithMembers?.filter(f =>
-                f.flat_number.toLowerCase().includes(flatSearch.toLowerCase()) ||
-                (f.wing || '').toLowerCase().includes(flatSearch.toLowerCase()) ||
-                (f.member?.full_name || '').toLowerCase().includes(flatSearch.toLowerCase())
-              ) || [];
-              const selectedFlat = flatsWithMembers?.find(f => f.id === field.value);
+              const flatOptions = (flatsWithMembers || []).map((f) => ({
+                value: f.id,
+                label: `${f.wing ? f.wing + '-' : ''}${f.flat_number}`,
+                hint: f.member?.full_name || undefined,
+                searchText: `${f.wing || ''} ${f.flat_number} ${f.member?.full_name || ''}`,
+              }));
               return (
                 <FormItem>
                   <FormLabel>Flat / Member *</FormLabel>
-                  <Select
-                    onValueChange={(value) => { field.onChange(value); setSelectedFlatId(value); setFlatSearch(''); }}
-                    defaultValue={field.value} value={field.value}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="h-12">
-                        <SelectValue placeholder="Search flat or member name...">
-                          {selectedFlat ? `${selectedFlat.wing ? selectedFlat.wing + '-' : ''}${selectedFlat.flat_number}${selectedFlat.member ? ' · ' + selectedFlat.member.full_name : ''}` : 'Search flat or member...'}
-                        </SelectValue>
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <div className="p-2 border-b">
-                        <Input
-                          placeholder="Type flat no or member name..."
-                          value={flatSearch}
-                          onChange={e => setFlatSearch(e.target.value)}
-                          className="h-8"
-                          onKeyDown={e => e.stopPropagation()}
-                        />
-                      </div>
-                      <div className="max-h-[200px] overflow-y-auto">
-                        {filtered.length === 0 && <div className="p-3 text-sm text-muted-foreground text-center">No match</div>}
-                        {filtered.map((flat) => (
-                          <SelectItem key={flat.id} value={flat.id}>
-                            <span className="font-medium">{flat.wing ? `${flat.wing}-` : ''}{flat.flat_number}</span>
-                            {flat.member && <span className="text-muted-foreground ml-2 text-xs">· {flat.member.full_name}</span>}
-                          </SelectItem>
-                        ))}
-                      </div>
-                    </SelectContent>
-                  </Select>
+                  <SearchableCombobox
+                    options={flatOptions}
+                    value={field.value}
+                    onChange={(v) => { field.onChange(v); setSelectedFlatId(v); }}
+                    placeholder="Search flat or member name..."
+                    searchPlaceholder="Type flat no or member name..."
+                    emptyText="No matching flat"
+                  />
                   <FormMessage />
                 </FormItem>
               );
@@ -557,7 +540,19 @@ export function IncomeForm({ onClose, prefill }: IncomeFormProps) {
         )}
 
         {/* Actions */}
-        <div className="flex gap-3 pt-4">
+                  <FileUploadField
+            label="Payment Evidence"
+            description="Cheque image, UPI screenshot, bank slip or any supporting proof"
+            category="Payment Evidence"
+            societyId={currentSocietyId || ''}
+            multiple
+            maxFiles={5}
+            value={proofFiles}
+            onChange={setProofFiles}
+            className="mb-4"
+          />
+
+          <div className="flex gap-3 pt-4">
           <Button type="button" variant="outline" onClick={onClose} className="flex-1 h-12">Cancel</Button>
           <Button type="submit" className="flex-1 h-12" disabled={mutation.isPending}>
             {mutation.isPending ? 'Saving...' : 'Generate Receipt'}

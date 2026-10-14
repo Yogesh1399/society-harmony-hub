@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 import { useSocietyStore } from '@/stores/societyStore';
@@ -69,6 +69,8 @@ export default function SuperAdminDashboard() {
     },
   });
 
+  const queryClient = useQueryClient();
+
   const handleSocietyClick = async (society: any) => {
     setCurrentSocietyId(society.id);
     setCurrentSociety(society);
@@ -79,6 +81,8 @@ export default function SuperAdminDashboard() {
       .eq('society_id', society.id)
       .single();
     if (features) setFeatures(features);
+    // Clear cached data belonging to the previously selected society
+    await queryClient.invalidateQueries();
     navigate('/dashboard');
   };
 

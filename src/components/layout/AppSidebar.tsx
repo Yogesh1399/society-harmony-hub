@@ -101,8 +101,9 @@ export function AppSidebar() {
   const DEFAULT_ACCESS: Record<string, string[]> = {
     committee_member: ['dashboard','flats','members','tenants','committee','income','expenses',
       'reports','notices','complaints','documents','notifications','maintenance','profile','family_members'],
-    flat_owner: ['dashboard','members','notices','complaints','notifications','profile','family_members'],
-    tenant: ['notices','complaints','notifications','profile'],
+    flat_owner: ['dashboard','members','tenants','notices','complaints','notifications','profile',
+      'family_members','maintenance','reports','income','expenses','documents','flats','bank','committee','vendors'],
+    tenant: ['notices','complaints','notifications','profile','family_members'],
   };
 
   // Determine nav access for a given item

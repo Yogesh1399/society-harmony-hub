@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -28,23 +28,19 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const { signIn, isLoading, isAuthenticated } = useAuth();
-
-  // If already authenticated, redirect away from login
-  if (isAuthenticated) {
-    navigate('/dashboard', { replace: true });
-    return null;
-  }
   const [showPassword, setShowPassword] = useState(false);
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/dashboard';
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      email: '',
-      password: '',
-    },
+    defaultValues: { email: '', password: '' },
   });
+
+  // Redirect after render (not during) to avoid hooks-order violation
+  if (isAuthenticated) {
+    return <Navigate to={from} replace />;
+  }
 
   const onSubmit = async (values: LoginFormValues) => {
     const { error } = await signIn(values.email, values.password);

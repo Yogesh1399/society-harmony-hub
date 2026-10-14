@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
@@ -28,9 +28,16 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
+import { Progress } from '@/components/ui/progress';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { IncomeForm } from '@/components/income/IncomeForm';
 import type { IncomeFormPrefill } from '@/components/income/IncomeForm';
 import { ReceiptPreviewDialog } from '@/components/receipts/ReceiptPreviewDialog';
+import {
+  computeFlatAmount,
+  toCSV,
+} from '@/lib/maintenanceBills';
+
 
 export default function MaintenancePage() {
   const { currentSocietyId } = useAuthStore();
@@ -43,10 +50,27 @@ export default function MaintenancePage() {
   const [isGenerateOpen, setIsGenerateOpen] = useState(false);
   const [editHead, setEditHead] = useState<any>(null);
   const [headForm, setHeadForm] = useState({ head_name: '', description: '', amount: '', calculation_type: 'flat_rate', frequency: 'monthly' });
-  const [generateMonth, setGenerateMonth] = useState(format(new Date(), 'yyyy-MM'));
+  const _now = new Date();
+  const [generateYear, setGenerateYear] = useState(_now.getFullYear());
+  const [generateMonthNum, setGenerateMonthNum] = useState(_now.getMonth() + 1); // 1-12
+  const generateMonth = `${generateYear}-${String(generateMonthNum).padStart(2, '0')}`;
+  const [generateProgress, setGenerateProgress] = useState<{ done: number; total: number; label: string } | null>(null);
   const [paymentPrefill, setPaymentPrefill] = useState<IncomeFormPrefill | null>(null);
   const [isPaymentFormOpen, setIsPaymentFormOpen] = useState(false);
   const [billPreview, setBillPreview] = useState<any>(null);
+
+  // Bill history filters
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterMonth, setFilterMonth] = useState<string>('all');
+  const [filterMinAmount, setFilterMinAmount] = useState('');
+  const [filterMaxAmount, setFilterMaxAmount] = useState('');
+  const [filterDueFrom, setFilterDueFrom] = useState('');
+  const [filterDueTo, setFilterDueTo] = useState('');
+  const [billsPage, setBillsPage] = useState(1);
+  const BILLS_PAGE_SIZE = 25;
+
+
+
 
   // Fetch maintenance heads
   const { data: heads } = useQuery({
@@ -90,13 +114,16 @@ export default function MaintenancePage() {
     enabled: !!currentSocietyId,
   });
 
-  // Fetch flats and members for bill generation
+  // Fetch flats and members for bill generation (include all fields needed for calc basis)
   const { data: flatsWithMembers } = useQuery({
     queryKey: ['flats-members-maintenance', currentSocietyId],
     queryFn: async () => {
       if (!currentSocietyId) return [];
       const { data, error } = await supabase
-        .from('flats').select('*, members(id, full_name)').eq('society_id', currentSocietyId).neq('status', 'vacant');
+        .from('flats')
+        .select('id, flat_number, wing, status, area_sqft, members(id, full_name, maintenance_amount, extra_maintenance, is_owner, self_occupied)')
+        .eq('society_id', currentSocietyId)
+        .neq('status', 'vacant');
       if (error) throw error;
       return data || [];
     },
@@ -129,85 +156,92 @@ export default function MaintenancePage() {
     onError: (err: any) => toast({ title: 'Error', description: err.message, variant: 'destructive' }),
   });
 
-  // Generate bills + ledger debits
+  // Shared amount calc used by both preview and generation — delegates to pure helper
+  const computeAmounts = () => {
+    const activeHeads = (heads || []).filter((h: any) => h.is_active);
+    const basis: string = (settings as any)?.calculation_basis || 'flat_rate';
+    const getFlatAmount = (flat: any) => computeFlatAmount(flat, settings as any, activeHeads);
+    return { activeHeads, basis, getFlatAmount };
+  };
+
+  // Preview memo used by Generate dialog
+  const generatePreview = useMemo(() => {
+    if (!flatsWithMembers) return [] as { flat: any; member: any; amount: number }[];
+    const { getFlatAmount } = computeAmounts();
+    return flatsWithMembers
+      .filter((f: any) => f.status !== 'vacant')
+      .map((flat: any) => ({
+        flat,
+        member: flat.members?.[0] || null,
+        amount: getFlatAmount(flat),
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flatsWithMembers, heads, settings]);
+
+  const previewTotal = generatePreview.reduce((s, p) => s + p.amount, 0);
+  const previewBillable = generatePreview.filter(p => p.amount > 0).length;
+
+
+  // Field-level validation errors from the edge function
+  const [serverErrors, setServerErrors] = useState<Record<string, string> | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
+
+  // Generate bills via edge function (atomic server-side transaction)
   const generateBillsMutation = useMutation({
     mutationFn: async () => {
-      if (!currentSocietyId || !flatsWithMembers || !heads) throw new Error('Missing data');
-      const activeHeads = heads.filter(h => h.is_active);
-      if (activeHeads.length === 0) throw new Error('No active maintenance heads');
+      if (!currentSocietyId) throw new Error('No society selected');
+      setServerErrors(null);
+      setServerError(null);
 
-      const totalAmount = activeHeads.reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
-      const dueDate = settings?.due_day
-        ? new Date(`${generateMonth}-${String(settings.due_day).padStart(2, '0')}`)
-        : new Date(`${generateMonth}-10`);
+      setGenerateProgress({ done: 0, total: 1, label: 'Generating bills on server…' });
 
-      const billInserts = flatsWithMembers.map(flat => ({
-        society_id: currentSocietyId,
-        flat_id: flat.id,
-        member_id: flat.members?.[0]?.id || null,
-        bill_month: generateMonth,
-        total_amount: totalAmount,
-        due_date: dueDate.toISOString().split('T')[0],
-        status: 'pending' as const,
-      }));
+      const { data, error } = await supabase.functions.invoke('generate-maintenance-bills', {
+        body: {
+          society_id: currentSocietyId,
+          year: Number(generateYear),
+          month: Number(generateMonthNum),
+          due_day: Number(settings?.due_day || 10),
+        },
+      });
 
-      const { data: insertedBills, error } = await supabase
-        .from('maintenance_bills')
-        .upsert(billInserts, { onConflict: 'society_id,flat_id,bill_month' })
-        .select();
-      if (error) throw error;
-
-      // Insert bill items
-      if (insertedBills) {
-        const itemInserts = insertedBills.flatMap(bill =>
-          activeHeads.map(head => ({
-            bill_id: bill.id, head_id: head.id, head_name: head.head_name, amount: Number(head.amount) || 0,
-          }))
-        );
-        if (itemInserts.length > 0) {
-          await supabase.from('maintenance_bill_items').insert(itemInserts);
-        }
-
-        // Create ledger debit entries for each bill
-        const ledgerInserts = insertedBills
-          .filter(bill => bill.member_id)
-          .map(bill => ({
-            society_id: currentSocietyId,
-            member_id: bill.member_id!,
-            flat_id: bill.flat_id,
-            entry_date: bill.bill_date,
-            description: `Maintenance - ${bill.bill_month}`,
-            debit: totalAmount,
-            credit: 0,
-            balance: 0, // Will be recalculated
-            reference_id: bill.id,
-            reference_type: 'maintenance_bill',
-          }));
-
-        if (ledgerInserts.length > 0) {
-          // Calculate running balances
-          for (const entry of ledgerInserts) {
-            const { data: lastLedger } = await supabase
-              .from('member_ledger').select('balance')
-              .eq('member_id', entry.member_id).eq('society_id', currentSocietyId)
-              .order('entry_date', { ascending: false }).order('created_at', { ascending: false })
-              .limit(1).single();
-            entry.balance = Number(lastLedger?.balance || 0) + totalAmount;
-            await supabase.from('member_ledger').insert(entry);
-          }
+      // supabase-js surfaces non-2xx as FunctionsHttpError but the response body
+      // is on `data` when we invoke with responseType. Handle both.
+      if (error) {
+        // Try to extract the JSON error body
+        const ctx: any = (error as any).context;
+        try {
+          const errBody = await ctx?.json?.();
+          if (errBody?.fieldErrors) setServerErrors(errBody.fieldErrors);
+          if (errBody?.error) setServerError(errBody.error);
+          throw new Error(errBody?.error || error.message);
+        } catch (e: any) {
+          throw new Error(e?.message || error.message);
         }
       }
+      if (data?.error) {
+        if (data.fieldErrors) setServerErrors(data.fieldErrors);
+        setServerError(data.error);
+        throw new Error(data.error);
+      }
 
-      return insertedBills?.length || 0;
+      setGenerateProgress({ done: 1, total: 1, label: 'Done' });
+      return data?.result?.bill_count ?? 0;
     },
     onSuccess: (count) => {
       queryClient.invalidateQueries({ queryKey: ['maintenance-bills'] });
       queryClient.invalidateQueries({ queryKey: ['member-ledger'] });
-      toast({ title: 'Bills generated', description: `${count} bills created with ledger entries for ${generateMonth}` });
+      toast({ title: 'Bills generated', description: `${count} bills created for ${generateMonth} (server-side, atomic)` });
+      setGenerateProgress(null);
       setIsGenerateOpen(false);
     },
-    onError: (err: any) => toast({ title: 'Error', description: err.message, variant: 'destructive' }),
+    onError: (err: any) => {
+      setGenerateProgress(null);
+      toast({ title: 'Cannot generate bills', description: err.message, variant: 'destructive' });
+    },
   });
+
+
+
 
   // Update settings
   const updateSettingsMutation = useMutation({
@@ -295,6 +329,83 @@ export default function MaintenancePage() {
     (sum, b) => sum + (Number(b.total_amount) + Number(b.penalty_amount || 0) + Number(b.interest_amount || 0) - Number(b.paid_amount || 0)), 0
   );
 
+  // Available months for filter (from existing bills)
+  const availableMonths = useMemo(() => {
+    const set = new Set<string>();
+    bills?.forEach(b => b.bill_month && set.add(b.bill_month));
+    return Array.from(set).sort().reverse();
+  }, [bills]);
+
+  const filteredBills = useMemo(() => {
+    if (!bills) return [];
+    const minA = filterMinAmount ? parseFloat(filterMinAmount) : null;
+    const maxA = filterMaxAmount ? parseFloat(filterMaxAmount) : null;
+    const from = filterDueFrom ? new Date(filterDueFrom) : null;
+    const to = filterDueTo ? new Date(filterDueTo) : null;
+    return bills.filter((b: any) => {
+      if (filterStatus !== 'all' && b.status !== filterStatus) return false;
+      if (filterMonth !== 'all' && b.bill_month !== filterMonth) return false;
+      const total = Number(b.total_amount) + Number(b.penalty_amount || 0) + Number(b.interest_amount || 0);
+      if (minA !== null && total < minA) return false;
+      if (maxA !== null && total > maxA) return false;
+      if (b.due_date) {
+        const d = new Date(b.due_date);
+        if (from && d < from) return false;
+        if (to) { const end = new Date(to); end.setHours(23,59,59,999); if (d > end) return false; }
+      }
+      return true;
+    });
+  }, [bills, filterStatus, filterMonth, filterMinAmount, filterMaxAmount, filterDueFrom, filterDueTo]);
+
+  // Reset to page 1 whenever filters change
+  useMemo(() => { setBillsPage(1); }, [filterStatus, filterMonth, filterMinAmount, filterMaxAmount, filterDueFrom, filterDueTo]);
+
+  const billsTotalPages = Math.max(1, Math.ceil(filteredBills.length / BILLS_PAGE_SIZE));
+  const pagedBills = useMemo(
+    () => filteredBills.slice((billsPage - 1) * BILLS_PAGE_SIZE, billsPage * BILLS_PAGE_SIZE),
+    [filteredBills, billsPage],
+  );
+
+  const resetFilters = () => {
+    setFilterStatus('all'); setFilterMonth('all');
+    setFilterMinAmount(''); setFilterMaxAmount('');
+    setFilterDueFrom(''); setFilterDueTo('');
+    setBillsPage(1);
+  };
+
+  const handleExportBillsCSV = () => {
+    if (filteredBills.length === 0) {
+      toast({ title: 'Nothing to export', description: 'No bills match the current filters', variant: 'destructive' });
+      return;
+    }
+    const rows = filteredBills.map((b: any) => {
+      const total = Number(b.total_amount) + Number(b.penalty_amount || 0) + Number(b.interest_amount || 0);
+      return {
+        Flat: `${b.flats?.wing ? b.flats.wing + '-' : ''}${b.flats?.flat_number || ''}`,
+        Member: b.members?.full_name || '',
+        Month: b.bill_month || '',
+        Amount: total,
+        Paid: Number(b.paid_amount || 0),
+        Outstanding: total - Number(b.paid_amount || 0),
+        'Due Date': b.due_date || '',
+        Status: b.status || '',
+      };
+    });
+    const csv = toCSV(rows, ['Flat', 'Member', 'Month', 'Amount', 'Paid', 'Outstanding', 'Due Date', 'Status']);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `maintenance-bills-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast({ title: 'Exported', description: `${rows.length} bills exported to CSV` });
+  };
+
+
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -373,11 +484,47 @@ export default function MaintenancePage() {
         <TabsContent value="bills" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>Maintenance Bills</CardTitle>
-              <CardDescription>{bills?.length || 0} bills generated</CardDescription>
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                <div>
+                  <CardTitle>Maintenance Bills History</CardTitle>
+                  <CardDescription>
+                    {filteredBills.length} of {bills?.length || 0} bills
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleExportBillsCSV} disabled={filteredBills.length === 0}>
+                  <Download className="mr-2 h-4 w-4" /> Export CSV
+                </Button>
+              </div>
+              {/* Filters */}
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2">
+                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                  <SelectTrigger className="h-9"><SelectValue placeholder="Status" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="partial">Partial</SelectItem>
+                    <SelectItem value="overdue">Overdue</SelectItem>
+                    <SelectItem value="paid">Paid</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={filterMonth} onValueChange={setFilterMonth}>
+                  <SelectTrigger className="h-9"><SelectValue placeholder="Month" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All months</SelectItem>
+                    {availableMonths.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Input type="date" value={filterDueFrom} onChange={e => setFilterDueFrom(e.target.value)} placeholder="Due from" className="h-9" />
+                <Input type="date" value={filterDueTo} onChange={e => setFilterDueTo(e.target.value)} placeholder="Due to" className="h-9" />
+                <Input type="number" value={filterMinAmount} onChange={e => setFilterMinAmount(e.target.value)} placeholder="Min ₹" className="h-9" />
+                <div className="flex gap-2">
+                  <Input type="number" value={filterMaxAmount} onChange={e => setFilterMaxAmount(e.target.value)} placeholder="Max ₹" className="h-9" />
+                  <Button variant="ghost" size="sm" onClick={resetFilters} className="h-9 shrink-0">Reset</Button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
-              {bills && bills.length > 0 ? (
+              {filteredBills.length > 0 ? (
                 <>
                   {/* Desktop */}
                   <div className="hidden md:block">
@@ -396,7 +543,7 @@ export default function MaintenancePage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {bills.map((bill: any) => {
+                        {pagedBills.map((bill: any) => {
                           const billTotal = Number(bill.total_amount) + Number(bill.penalty_amount || 0) + Number(bill.interest_amount || 0);
                           const outstanding = billTotal - Number(bill.paid_amount || 0);
                           return (
@@ -453,7 +600,7 @@ export default function MaintenancePage() {
 
                   {/* Mobile */}
                   <div className="md:hidden space-y-3">
-                    {bills.map((bill: any) => {
+                    {pagedBills.map((bill: any) => {
                       const billTotal = Number(bill.total_amount) + Number(bill.penalty_amount || 0) + Number(bill.interest_amount || 0);
                       const outstanding = billTotal - Number(bill.paid_amount || 0);
                       return (
@@ -504,6 +651,19 @@ export default function MaintenancePage() {
                       );
                     })}
                   </div>
+
+                  {/* Pagination */}
+                  {billsTotalPages > 1 && (
+                    <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+                      <p className="text-sm text-muted-foreground">
+                        Page {billsPage} of {billsTotalPages} • showing {(billsPage - 1) * BILLS_PAGE_SIZE + 1}–{Math.min(billsPage * BILLS_PAGE_SIZE, filteredBills.length)} of {filteredBills.length}
+                      </p>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setBillsPage(p => Math.max(1, p - 1))} disabled={billsPage <= 1}>Previous</Button>
+                        <Button variant="outline" size="sm" onClick={() => setBillsPage(p => Math.min(billsTotalPages, p + 1))} disabled={billsPage >= billsTotalPages}>Next</Button>
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="text-center py-12">
@@ -690,34 +850,104 @@ export default function MaintenancePage() {
       </Dialog>
 
       {/* Generate Bills Dialog */}
-      <Dialog open={isGenerateOpen} onOpenChange={setIsGenerateOpen}>
-        <DialogContent>
+      <Dialog open={isGenerateOpen} onOpenChange={(o) => { if (!generateBillsMutation.isPending) setIsGenerateOpen(o); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Generate Maintenance Bills</DialogTitle>
-            <DialogDescription>Generate bills for all occupied flats with ledger entries</DialogDescription>
+            <DialogDescription>Preview and bulk-create bills for all active flats</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Month</Label>
+                <Select value={String(generateMonthNum)} onValueChange={(v) => setGenerateMonthNum(Number(v))}>
+                  <SelectTrigger className="h-11 mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['January','February','March','April','May','June','July','August','September','October','November','December'].map((m, i) => (
+                      <SelectItem key={m} value={String(i + 1)}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Year</Label>
+                <Select value={String(generateYear)} onValueChange={(v) => setGenerateYear(Number(v))}>
+                  <SelectTrigger className="h-11 mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map(y => (
+                      <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3 text-sm grid grid-cols-3 gap-2">
+              <div><p className="text-muted-foreground text-xs">Billable flats</p><p className="font-semibold">{previewBillable}</p></div>
+              <div><p className="text-muted-foreground text-xs">Total amount</p><p className="font-semibold">₹{previewTotal.toLocaleString('en-IN')}</p></div>
+              <div><p className="text-muted-foreground text-xs">Due day</p><p className="font-semibold">{settings?.due_day || 10}</p></div>
+            </div>
+
             <div>
-              <Label>Bill Month</Label>
-              <Input type="month" value={generateMonth} onChange={e => setGenerateMonth(e.target.value)} className="h-12 mt-1" />
+              <Label className="text-xs text-muted-foreground">Preview ({generatePreview.length} flats)</Label>
+              <ScrollArea className="h-56 mt-1 rounded-md border">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-background">
+                    <TableRow>
+                      <TableHead className="h-8">Flat</TableHead>
+                      <TableHead className="h-8">Member</TableHead>
+                      <TableHead className="h-8 text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {generatePreview.length === 0 ? (
+                      <TableRow><TableCell colSpan={3} className="text-center text-muted-foreground py-6">No active flats</TableCell></TableRow>
+                    ) : generatePreview.map((p, i) => (
+                      <TableRow key={i}>
+                        <TableCell className="py-1.5">{p.flat.wing ? `${p.flat.wing}-` : ''}{p.flat.flat_number}</TableCell>
+                        <TableCell className="py-1.5 text-muted-foreground">{p.member?.full_name || '—'}</TableCell>
+                        <TableCell className={`py-1.5 text-right ${p.amount > 0 ? '' : 'text-muted-foreground'}`}>₹{p.amount.toLocaleString('en-IN')}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
             </div>
-            <div className="rounded-lg border p-3 text-sm space-y-1">
-              <p>Active Heads: <strong>{heads?.filter(h => h.is_active).length || 0}</strong></p>
-              <p>Total per Flat: <strong>₹{heads?.filter(h => h.is_active).reduce((s, h) => s + (Number(h.amount) || 0), 0).toLocaleString('en-IN')}</strong></p>
-              <p>Flats to Bill: <strong>{flatsWithMembers?.length || 0}</strong></p>
+
+            {generateProgress && (
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{generateProgress.label}</span>
+                  <span>{generateProgress.done}/{generateProgress.total}</span>
+                </div>
+                <Progress value={(generateProgress.done / Math.max(1, generateProgress.total)) * 100} />
+              </div>
+            )}
+
+            {(serverError || serverErrors) && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive space-y-1">
+                {serverError && <p className="font-medium">{serverError}</p>}
+                {serverErrors && Object.entries(serverErrors).map(([field, msg]) => (
+                  <p key={field}>• <span className="font-medium">{field}:</span> {msg}</p>
+                ))}
+              </div>
+            )}
+
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
+              Bills are generated server-side in a single transaction — bills, ledger entries, notifications, and the audit log all commit together or not at all.
             </div>
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-muted-foreground">
-              Bills will auto-create debit entries in Member Ledger and can be paid via Accept Payment.
-            </div>
+
+
             <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => setIsGenerateOpen(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={() => generateBillsMutation.mutate()} disabled={generateBillsMutation.isPending}>
-                {generateBillsMutation.isPending ? 'Generating...' : 'Generate Bills'}
+              <Button variant="outline" className="flex-1" onClick={() => setIsGenerateOpen(false)} disabled={generateBillsMutation.isPending}>Cancel</Button>
+              <Button className="flex-1" onClick={() => generateBillsMutation.mutate()} disabled={generateBillsMutation.isPending || previewBillable === 0}>
+                {generateBillsMutation.isPending ? 'Generating…' : `Generate ${previewBillable} Bills`}
               </Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
+
 
       {/* Accept Payment Dialog */}
       <Dialog open={isPaymentFormOpen} onOpenChange={setIsPaymentFormOpen}>

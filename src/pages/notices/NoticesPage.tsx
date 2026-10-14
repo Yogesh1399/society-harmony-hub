@@ -18,7 +18,7 @@ import { useToast } from '@/hooks/use-toast';
 import { NoticeForm } from '@/components/notices/NoticeForm';
 
 export default function NoticesPage() {
-  const { currentSocietyId, user, getCurrentRole } = useAuthStore();
+  const { currentSocietyId, user, isSuperAdmin, isAdmin: isAdminFn, getCurrentRole } = useAuthStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
@@ -26,7 +26,7 @@ export default function NoticesPage() {
   const [viewNotice, setViewNotice] = useState<any>(null);
   const [viewReads, setViewReads] = useState<any>(null);
   const currentRole = getCurrentRole();
-  const isAdmin = currentRole === 'super_admin' || currentRole === 'society_admin' || currentRole === 'committee_member';
+  const isAdmin = isSuperAdmin() || isAdminFn() || currentRole === 'committee_member';
 
   const { data: notices, isLoading } = useQuery({
     queryKey: ['notices', currentSocietyId],
@@ -256,6 +256,16 @@ export default function NoticesPage() {
           <div className="prose prose-sm max-w-none">
             <p className="whitespace-pre-wrap text-foreground">{viewNotice?.content}</p>
           </div>
+          {viewNotice?.attachment_url && (
+            <a
+              href={viewNotice.attachment_url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex items-center gap-2 text-sm text-primary underline"
+            >
+              📎 {viewNotice.attachment_name || 'View attachment'}
+            </a>
+          )}
         </DialogContent>
       </Dialog>
 
