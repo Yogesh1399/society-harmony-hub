@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useSocietyStore } from '@/stores/societyStore';
 import { useAuthStore } from '@/stores/authStore';
+import { useFiscalPeriod } from '@/hooks/useFiscalPeriod';
 import { cn } from '@/lib/utils';
 
 function StatCard({
@@ -56,6 +57,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { currentSociety } = useSocietyStore();
   const { profile, getCurrentRole, currentSocietyId } = useAuthStore();
+  const { period } = useFiscalPeriod();
   const currentRole = getCurrentRole();
 
   const formatCurrency = (amount: number) =>
@@ -157,10 +159,29 @@ export default function Dashboard() {
   const totalMembers = members?.length || 0;
   const totalActiveTenants = activeTenants?.length || 0;
 
-  const now = new Date();
+  // For a live year this is "this month". For a closed year (an audited past
+  // book) there is no current month inside it, so fall back to the most recent
+  // month that has entries — otherwise the card just reads zero.
+  const collectionMonth = (() => {
+    const now = new Date();
+    if (period.isCurrent) return { y: now.getFullYear(), m: now.getMonth() };
+    const dates = (incomeEntries || [])
+      .map(e => new Date(e.receipt_date))
+      .filter(d => !isNaN(d.getTime()))
+      .sort((a, b) => b.getTime() - a.getTime());
+    const d = dates[0] || new Date(period.end + 'T00:00:00');
+    return { y: d.getFullYear(), m: d.getMonth() };
+  })();
+
   const thisMonthIncome = incomeEntries
-    ?.filter(e => { const d = new Date(e.receipt_date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); })
+    ?.filter(e => {
+      const d = new Date(e.receipt_date);
+      return d.getMonth() === collectionMonth.m && d.getFullYear() === collectionMonth.y;
+    })
     .reduce((sum, e) => sum + Number(e.total_amount), 0) || 0;
+
+  const collectionMonthLabel = new Date(collectionMonth.y, collectionMonth.m, 1)
+    .toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
 
   const totalIncome = incomeEntries?.reduce((sum, e) => sum + Number(e.total_amount), 0) || 0;
   const totalExpenses = expenseEntries?.reduce((sum, e) => sum + Number(e.net_amount), 0) || 0;
@@ -212,7 +233,10 @@ export default function Dashboard() {
 
         <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/income')}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Monthly Collection</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Monthly Collection
+              <span className="ml-1 font-normal text-xs">({collectionMonthLabel})</span>
+            </CardTitle>
             <div className="rounded-full bg-accent p-2"><TrendingUp className="h-4 w-4 text-accent-foreground" /></div>
           </CardHeader>
           <CardContent>

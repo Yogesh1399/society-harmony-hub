@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
+import { useFiscalPeriod } from '@/hooks/useFiscalPeriod';
 import { useSocietyStore } from '@/stores/societyStore';
 import { format } from 'date-fns';
 import {
@@ -51,8 +52,14 @@ export default function MaintenancePage() {
   const [editHead, setEditHead] = useState<any>(null);
   const [headForm, setHeadForm] = useState({ head_name: '', description: '', amount: '', calculation_type: 'flat_rate', frequency: 'monthly' });
   const _now = new Date();
-  const [generateYear, setGenerateYear] = useState(_now.getFullYear());
-  const [generateMonthNum, setGenerateMonthNum] = useState(_now.getMonth() + 1); // 1-12
+  // Default the generator to the society's accounting period rather than today,
+  // so a closed past year does not open on a month outside its own books.
+  const { period: fiscalPeriod } = useFiscalPeriod();
+  const _defaultGen = fiscalPeriod.isCurrent
+    ? { y: _now.getFullYear(), m: _now.getMonth() + 1 }
+    : { y: Number(fiscalPeriod.end.slice(0, 4)), m: Number(fiscalPeriod.end.slice(5, 7)) };
+  const [generateYear, setGenerateYear] = useState(_defaultGen.y);
+  const [generateMonthNum, setGenerateMonthNum] = useState(_defaultGen.m); // 1-12
   const generateMonth = `${generateYear}-${String(generateMonthNum).padStart(2, '0')}`;
   const [generateProgress, setGenerateProgress] = useState<{ done: number; total: number; label: string } | null>(null);
   const [paymentPrefill, setPaymentPrefill] = useState<IncomeFormPrefill | null>(null);
@@ -874,7 +881,7 @@ export default function MaintenancePage() {
                 <Select value={String(generateYear)} onValueChange={(v) => setGenerateYear(Number(v))}>
                   <SelectTrigger className="h-11 mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map(y => (
+                    {Array.from(new Set([fiscalPeriod.startYear, Number(fiscalPeriod.end.slice(0,4)), ...Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i)])).sort((a,b)=>b-a).map(y => (
                       <SelectItem key={y} value={String(y)}>{y}</SelectItem>
                     ))}
                   </SelectContent>

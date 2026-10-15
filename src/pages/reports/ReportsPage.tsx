@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
+import { useFiscalPeriod } from '@/hooks/useFiscalPeriod';
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -31,6 +32,7 @@ const formatCurrency = (amount: number) =>
 
 export default function ReportsPage() {
   const { currentSocietyId } = useAuthStore();
+  const { period } = useFiscalPeriod();
 
   const { data: incomeEntries } = useQuery({
     queryKey: ['report_income', currentSocietyId],
@@ -87,10 +89,13 @@ export default function ReportsPage() {
   });
 
   // Monthly income vs expense (last 6 months)
-  const monthlyData = (() => {
+  const monthlyData = ((_periodKey: string) => {
     const months: { name: string; income: number; expense: number }[] = [];
+    // Anchor the trend to the accounting period so a closed past year still
+    // charts its own months instead of six empty ones around today.
+    const anchor = period.isCurrent ? new Date() : new Date(period.end + 'T00:00:00');
     for (let i = 5; i >= 0; i--) {
-      const d = subMonths(new Date(), i);
+      const d = subMonths(anchor, i);
       const start = startOfMonth(d);
       const end = endOfMonth(d);
       const monthIncome = incomeEntries?.filter(e => {
@@ -104,7 +109,7 @@ export default function ReportsPage() {
       months.push({ name: format(d, 'MMM yy'), income: monthIncome, expense: monthExpense });
     }
     return months;
-  })();
+  })(period.start + period.end);
 
   // Expense by head
   const expenseByHead = (() => {
@@ -515,9 +520,17 @@ function MonthlyCollectionReport({ societyId }: { societyId: string | null }) {
 // Member-wise Ledger Report
 // ============================================================
 function MemberLedgerReport({ societyId }: { societyId: string | null }) {
+  const { period } = useFiscalPeriod();
   const [memberId, setMemberId] = useState<string>('');
-  const [fromDate, setFromDate] = useState<string>(format(subMonths(new Date(), 12), 'yyyy-MM-dd'));
-  const [toDate, setToDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [fromDate, setFromDate] = useState<string>(period.start);
+  const [toDate, setToDate] = useState<string>(period.end);
+
+  // The period loads asynchronously; adopt it once, without clobbering a
+  // range the user has already picked themselves.
+  const [rangeTouched, setRangeTouched] = useState(false);
+  useEffect(() => {
+    if (!rangeTouched) { setFromDate(period.start); setToDate(period.end); }
+  }, [period.start, period.end, rangeTouched]);
 
   const { data: members } = useQuery({
     queryKey: ['ledger_members', societyId],
@@ -713,7 +726,10 @@ function MemberLedgerReport({ societyId }: { societyId: string | null }) {
 // Annual Summary Report
 // ============================================================
 function AnnualSummaryReport({ incomeEntries, expenseEntries, incomeDetails }: { incomeEntries: any[]; expenseEntries: any[]; incomeDetails: any[] }) {
-  const [year, setYear] = useState<number>(new Date().getFullYear());
+  const { period } = useFiscalPeriod();
+  const [year, setYear] = useState<number>(period.startYear);
+  const [yearTouched, setYearTouched] = useState(false);
+  useEffect(() => { if (!yearTouched) setYear(period.startYear); }, [period.startYear, yearTouched]);
 
   const yearStart = useMemo(() => new Date(year, 0, 1), [year]);
   const yearEnd = useMemo(() => new Date(year, 11, 31, 23, 59, 59), [year]);
@@ -769,7 +785,12 @@ function AnnualSummaryReport({ incomeEntries, expenseEntries, incomeDetails }: {
   const totalExpense = monthly.reduce((s, m) => s + m.expense, 0);
   const surplus = totalIncome - totalExpense;
 
-  const yearOptions = Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i);
+  const yearOptions = Array.from(
+    new Set([
+      period.startYear,
+      ...Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i),
+    ])
+  ).sort((a, b) => b - a);
 
   return (
     <Card>
@@ -779,7 +800,7 @@ function AnnualSummaryReport({ incomeEntries, expenseEntries, incomeDetails }: {
           <CardDescription>Calendar year breakdown of income and expenses</CardDescription>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={String(year)} onValueChange={v => setYear(Number(v))}>
+          <Select value={String(year)} onValueChange={v => { setYearTouched(true); setYear(Number(v)); }}>
             <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
             <SelectContent>
               {yearOptions.map(y => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
