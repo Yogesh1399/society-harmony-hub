@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
+import { useAccess } from '@/hooks/useAccess';
 import { useSocietyStore } from '@/stores/societyStore';
 import { format } from 'date-fns';
 import { Plus, TrendingUp, Eye, Download, MoreHorizontal, XCircle, IndianRupee, Printer } from 'lucide-react';
@@ -36,6 +37,11 @@ const paymentModeLabels: Record<string, string> = {
 
 export default function IncomePage() {
   const { currentSocietyId } = useAuthStore();
+  const { can } = useAccess();
+  const canCreate = can('income', 'create');
+  // Cancelling a receipt reverses money that was already acknowledged to
+  // a member, so it is an office-bearer action, not an entry-clerk one.
+  const canCancel = can('income', 'delete');
   const { currentSociety } = useSocietyStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -191,9 +197,11 @@ export default function IncomePage() {
           <h1 className="text-2xl font-bold text-foreground">Income Register</h1>
           <p className="text-muted-foreground">Record and manage maintenance collections</p>
         </div>
-        <Button onClick={() => setIsFormOpen(true)} className="touch-target">
-          <Plus className="mr-2 h-4 w-4" /> Record Income
-        </Button>
+        {canCreate && (
+          <Button onClick={() => setIsFormOpen(true)} className="touch-target">
+            <Plus className="mr-2 h-4 w-4" /> Record Income
+          </Button>
+        )}
       </div>
 
       {/* Summary Cards */}
@@ -327,7 +335,7 @@ export default function IncomePage() {
                               <DropdownMenuItem onClick={() => handleViewReceipt(entry)}>
                                 <Printer className="mr-2 h-4 w-4" />Print Receipt
                               </DropdownMenuItem>
-                              {!entry.is_cancelled && (
+                              {canCancel && !entry.is_cancelled && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem onClick={() => cancelMutation.mutate(entry.id)} className="text-destructive">
@@ -370,7 +378,7 @@ export default function IncomePage() {
                             <DropdownMenuItem onClick={() => handleViewReceipt(entry)}>
                               <Download className="mr-2 h-4 w-4" />Download
                             </DropdownMenuItem>
-                            {!entry.is_cancelled && (
+                            {canCancel && !entry.is_cancelled && (
                               <DropdownMenuItem onClick={() => cancelMutation.mutate(entry.id)} className="text-destructive">
                                 <XCircle className="mr-2 h-4 w-4" />Cancel
                               </DropdownMenuItem>

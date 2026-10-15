@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
+import { useAccess } from '@/hooks/useAccess';
 import { Plus, Users, Search, Edit, Trash2, MoreHorizontal, Phone, Mail, Home, KeyRound, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,6 +42,12 @@ type Member = Database['public']['Tables']['members']['Row'] & {
 
 export default function MembersPage() {
   const { currentSocietyId } = useAuthStore();
+  const { can, isFullAccess } = useAccess();
+  const canCreate = can('members', 'create');
+  const canEdit   = can('members', 'edit');
+  // Deleting a member removes their ledger history with them, so this
+  // stays with the society administration, not the committee at large.
+  const canDelete = isFullAccess;
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
@@ -145,18 +152,22 @@ export default function MembersPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Members Directory</h1>
-          <p className="text-muted-foreground">Manage flat owners and their details</p>
+          <p className="text-muted-foreground">
+            {canEdit ? 'Manage flat owners and their details' : 'Flat owners and their contact details'}
+          </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setIsBulkOpen(true)} className="touch-target">
-            <Upload className="mr-2 h-4 w-4" />
-            Bulk Upload
-          </Button>
-          <Button onClick={() => setIsFormOpen(true)} className="touch-target">
-            <Plus className="mr-2 h-4 w-4" />
-            Add Member
-          </Button>
-        </div>
+        {canCreate && (
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setIsBulkOpen(true)} className="touch-target">
+              <Upload className="mr-2 h-4 w-4" />
+              Bulk Upload
+            </Button>
+            <Button onClick={() => setIsFormOpen(true)} className="touch-target">
+              <Plus className="mr-2 h-4 w-4" />
+              Add Member
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Search */}
@@ -278,6 +289,7 @@ export default function MembersPage() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
+                          {(canEdit || canDelete) && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" size="icon">
@@ -285,31 +297,36 @@ export default function MembersPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleEdit(member)}>
-                                <Edit className="mr-2 h-4 w-4" />
-                                Edit
-                              </DropdownMenuItem>
-                              {!member.user_id && member.flat_id && (
+                              {canEdit && (
+                                <DropdownMenuItem onClick={() => handleEdit(member)}>
+                                  <Edit className="mr-2 h-4 w-4" />
+                                  Edit
+                                </DropdownMenuItem>
+                              )}
+                              {isFullAccess && !member.user_id && member.flat_id && (
                                 <DropdownMenuItem onClick={() => createMemberAccount(member)}>
                                   <KeyRound className="mr-2 h-4 w-4" />
                                   Create Login
                                 </DropdownMenuItem>
                               )}
-                              {member.user_id && (
+                              {isFullAccess && member.user_id && (
                                 <DropdownMenuItem disabled className="text-muted-foreground">
                                   <KeyRound className="mr-2 h-4 w-4" />
                                   Login Active
                                 </DropdownMenuItem>
                               )}
-                              <DropdownMenuItem
-                                onClick={() => handleDelete(member)}
-                                className="text-destructive"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
-                              </DropdownMenuItem>
+                              {canDelete && (
+                                <DropdownMenuItem
+                                  onClick={() => handleDelete(member)}
+                                  className="text-destructive"
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  Delete
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -338,6 +355,7 @@ export default function MembersPage() {
                             )}
                           </div>
                         </div>
+                        {(canEdit || canDelete) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon">
@@ -345,25 +363,30 @@ export default function MembersPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleEdit(member)}>
-                              <Edit className="mr-2 h-4 w-4" />
-                              Edit
-                            </DropdownMenuItem>
-                            {!member.user_id && member.flat_id && (
+                            {canEdit && (
+                              <DropdownMenuItem onClick={() => handleEdit(member)}>
+                                <Edit className="mr-2 h-4 w-4" />
+                                Edit
+                              </DropdownMenuItem>
+                            )}
+                            {isFullAccess && !member.user_id && member.flat_id && (
                               <DropdownMenuItem onClick={() => createMemberAccount(member)}>
                                 <KeyRound className="mr-2 h-4 w-4" />
                                 Create Login
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuItem
-                              onClick={() => handleDelete(member)}
-                              className="text-destructive"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
+                            {canDelete && (
+                              <DropdownMenuItem
+                                onClick={() => handleDelete(member)}
+                                className="text-destructive"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        )}
                       </div>
                       <div className="mt-3 space-y-1">
                         {member.mobile && (

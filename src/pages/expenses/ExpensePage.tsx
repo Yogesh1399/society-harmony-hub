@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
+import { useAccess } from '@/hooks/useAccess';
 import { useSocietyStore } from '@/stores/societyStore';
 import { format } from 'date-fns';
 import { Plus, TrendingDown, Eye, Download, MoreHorizontal, XCircle, IndianRupee, Printer, Clock } from 'lucide-react';
@@ -31,6 +32,11 @@ const paymentModeLabels: Record<string, string> = {
 
 export default function ExpensePage() {
   const { currentSocietyId } = useAuthStore();
+  const { can } = useAccess();
+  const canCreate = can('expenses', 'create');
+  // Cancelling a voucher undoes a payment the society has already
+  // recorded against a vendor. Office bearers only.
+  const canCancel = can('expenses', 'delete');
   const { currentSociety } = useSocietyStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -170,9 +176,11 @@ export default function ExpensePage() {
           <h1 className="text-2xl font-bold text-foreground">Expense Register</h1>
           <p className="text-muted-foreground">Record and manage society expenses</p>
         </div>
-        <Button onClick={() => setIsFormOpen(true)} className="touch-target">
-          <Plus className="mr-2 h-4 w-4" /> Record Expense
-        </Button>
+        {canCreate && (
+          <Button onClick={() => setIsFormOpen(true)} className="touch-target">
+            <Plus className="mr-2 h-4 w-4" /> Record Expense
+          </Button>
+        )}
       </div>
 
       {/* Summary Cards */}
@@ -320,7 +328,7 @@ export default function ExpensePage() {
                               <DropdownMenuItem onClick={() => setHistoryEntry({ id: entry.id, voucher_number: entry.voucher_number })}>
                                 <Clock className="mr-2 h-4 w-4" />Approval History
                               </DropdownMenuItem>
-                              {!entry.is_cancelled && (
+                              {canCancel && !entry.is_cancelled && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem onClick={() => cancelMutation.mutate(entry.id)} className="text-destructive">
@@ -365,7 +373,7 @@ export default function ExpensePage() {
                             <DropdownMenuItem onClick={() => setHistoryEntry({ id: entry.id, voucher_number: entry.voucher_number })}>
                               <Clock className="mr-2 h-4 w-4" />Approval History
                             </DropdownMenuItem>
-                            {!entry.is_cancelled && (
+                            {canCancel && !entry.is_cancelled && (
                               <DropdownMenuItem onClick={() => cancelMutation.mutate(entry.id)} className="text-destructive">
                                 <XCircle className="mr-2 h-4 w-4" />Cancel
                               </DropdownMenuItem>

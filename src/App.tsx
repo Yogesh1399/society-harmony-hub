@@ -15,6 +15,7 @@ import ResetPassword from "@/pages/auth/ResetPassword";
 // Layout
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { RequireModule } from "@/components/auth/RequireModule";
 
 // Pages
 import Dashboard from "@/pages/dashboard/Dashboard";
@@ -87,31 +88,38 @@ const App = () => {
                 </ProtectedRoute>
               }
             >
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/flats" element={<FlatsPage />} />
-              <Route path="/members" element={<MembersPage />} />
+              {/* Always available to anyone signed in: their own profile */}
               <Route path="/my-profile" element={<MemberPortal />} />
               <Route path="/my-tenant-profile" element={<TenantPortal />} />
-              <Route path="/income" element={<IncomePage />} />
-              <Route path="/expenses" element={<ExpensePage />} />
-              <Route path="/tenants" element={<TenantsPage />} />
-              <Route path="/notifications" element={<NotificationsPage />} />
-              <Route path="/committee" element={<CommitteePage />} />
-              <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/notices" element={<NoticesPage />} />
-              <Route path="/complaints" element={<ComplaintsPage />} />
-              <Route path="/documents" element={<DocumentsPage />} />
-              <Route path="/admin-controller" element={<AdminControllerPage />} />
-              <Route path="/maintenance" element={<MaintenancePage />} />
-              <Route path="/approvals" element={<ApprovalsPage />} />
-              <Route path="/bank-reconciliation" element={<BankReconciliationPage />} />
-              <Route path="/vendors" element={<VendorManagementPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
               <Route path="/profile" element={<MemberPortal />} />
-              <Route path="/super-admin" element={<SuperAdminDashboard />} />
-              <Route path="/super-admin/societies" element={<SocietyRegistration />} />
-              <Route path="/super-admin/support" element={<SupportDashboard />} />
-              <Route path="/super-admin/users" element={<UserManagement />} />
+
+              {/* Gated by module — typing the URL is no longer a way in */}
+              <Route path="/dashboard"   element={<RequireModule module="dashboard"><Dashboard /></RequireModule>} />
+              <Route path="/flats"       element={<RequireModule module="flats"><FlatsPage /></RequireModule>} />
+              <Route path="/members"     element={<RequireModule module="members"><MembersPage /></RequireModule>} />
+              <Route path="/income"      element={<RequireModule module="income"><IncomePage /></RequireModule>} />
+              <Route path="/expenses"    element={<RequireModule module="expenses"><ExpensePage /></RequireModule>} />
+              <Route path="/tenants"     element={<RequireModule module="tenants"><TenantsPage /></RequireModule>} />
+              <Route path="/notifications" element={<RequireModule module="notifications"><NotificationsPage /></RequireModule>} />
+              <Route path="/committee"   element={<RequireModule module="committee"><CommitteePage /></RequireModule>} />
+              <Route path="/reports"     element={<RequireModule module="reports"><ReportsPage /></RequireModule>} />
+              <Route path="/notices"     element={<RequireModule module="notices"><NoticesPage /></RequireModule>} />
+              <Route path="/complaints"  element={<RequireModule module="complaints"><ComplaintsPage /></RequireModule>} />
+              <Route path="/documents"   element={<RequireModule module="documents"><DocumentsPage /></RequireModule>} />
+              <Route path="/maintenance" element={<RequireModule module="maintenance"><MaintenancePage /></RequireModule>} />
+              <Route path="/approvals"   element={<RequireModule module="expenses"><ApprovalsPage /></RequireModule>} />
+              <Route path="/bank-reconciliation" element={<RequireModule module="bank"><BankReconciliationPage /></RequireModule>} />
+              <Route path="/vendors"     element={<RequireModule module="vendors"><VendorManagementPage /></RequireModule>} />
+
+              {/* Society configuration — admin only */}
+              <Route path="/admin-controller" element={<RequireModule adminOnly><AdminControllerPage /></RequireModule>} />
+              <Route path="/settings"         element={<RequireModule adminOnly><SettingsPage /></RequireModule>} />
+
+              {/* Platform — super admin only */}
+              <Route path="/super-admin"           element={<RequireModule superOnly><SuperAdminDashboard /></RequireModule>} />
+              <Route path="/super-admin/societies" element={<RequireModule superOnly><SocietyRegistration /></RequireModule>} />
+              <Route path="/super-admin/support"   element={<RequireModule superOnly><SupportDashboard /></RequireModule>} />
+              <Route path="/super-admin/users"     element={<RequireModule superOnly><UserManagement /></RequireModule>} />
             </Route>
             
             {/* Unauthorized */}

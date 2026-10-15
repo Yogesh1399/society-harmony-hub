@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useAuthStore } from '@/stores/authStore';
 import { useSocietyStore } from '@/stores/societyStore';
 import { useAuth } from '@/hooks/useAuth';
-import { usePermissions } from '@/hooks/usePermissions';
+import { useAccess } from '@/hooks/useAccess';
 import { useCommitteeRole } from '@/hooks/useCommitteeRole';
 import { cn } from '@/lib/utils';
 
@@ -81,61 +81,33 @@ export function AppSidebar() {
   const { profile, isSuperAdmin, getCurrentRole, hasRole } = useAuthStore();
   const { currentSociety, isFeatureEnabled } = useSocietyStore();
   const { signOut } = useAuth();
-  const { hasPermission, isLoading: permsLoading } = usePermissions();
+  const { can, isFullAccess } = useAccess();
   const { isCommittee } = useCommitteeRole();
 
   const isSuper = isSuperAdmin();
   const currentRole = getCurrentRole();
-  const isSocietyAdmin = currentRole === 'society_admin';
   const isFlatOwner = hasRole('flat_owner');
   const isTenant = hasRole('tenant');
 
-  // Admins always see & can use everything
-  const isFullAccess = isSuper || isSocietyAdmin;
+  // What a denied item looks like.
+  //
+  // For an admin or committee member, greying the item out is useful —
+  // it tells them the module exists and that their group does not cover
+  // it, so they know what to ask for.
+  //
+  // For a resident or tenant, a grey padlocked list of the society's
+  // finance screens is just a tour of what they cannot have. Hide it.
+  const denyState: 'dimmed' | 'hidden' =
+    isFullAccess || isCommittee ? 'dimmed' : 'hidden';
 
-  // Check if user has ANY group assignments (if not, fall back to role-based defaults)
-  const { userGroups } = usePermissions();
-  const hasGroupAssignments = userGroups.length > 0;
-
-  // Default module access by role (when no group permissions configured yet)
-  const DEFAULT_ACCESS: Record<string, string[]> = {
-    committee_member: ['dashboard','flats','members','tenants','committee','income','expenses',
-      'reports','notices','complaints','documents','notifications','maintenance','profile','family_members'],
-    flat_owner: ['dashboard','members','tenants','notices','complaints','notifications','profile',
-      'family_members','maintenance','reports','income','expenses','documents','flats','bank','committee','vendors'],
-    tenant: ['notices','complaints','notifications','profile','family_members'],
-  };
-
-  // Determine nav access for a given item
+  // Determine nav access for a given item.
+  // The decision itself lives in useAccess, so this link and the page
+  // behind it can never disagree.
   const getItemState = (item: NavItem): 'visible' | 'dimmed' | 'hidden' => {
     if (item.feature && !isFeatureEnabled(item.feature as any)) return 'hidden';
     if (item.adminOnly) return isFullAccess ? 'visible' : 'hidden';
-
-    // Super admin / society admin see everything
-    if (isFullAccess) return 'visible';
-
-    // Committee member: full visibility (they manage the society)
-    if (isCommittee) {
-      if (!item.module) return 'visible';
-      if (!hasGroupAssignments) {
-        // No group configured yet → use default committee access
-        return (DEFAULT_ACCESS.committee_member || []).includes(item.module) ? 'visible' : 'dimmed';
-      }
-      return hasPermission(item.module, 'view') ? 'visible' : 'dimmed';
-    }
-
-    // flat_owner / tenant with no module → always show
     if (!item.module) return 'visible';
-
-    if (!hasGroupAssignments) {
-      // No group configured → use role-based defaults
-      const role = currentRole || 'flat_owner';
-      const defaults = DEFAULT_ACCESS[role] || DEFAULT_ACCESS.flat_owner;
-      return defaults.includes(item.module) ? 'visible' : 'dimmed';
-    }
-
-    if (permsLoading) return 'visible'; // show while loading, don't flash
-    return hasPermission(item.module, 'view') ? 'visible' : 'dimmed';
+    return can(item.module, 'view') ? 'visible' : denyState;
   };
 
   const renderNavGroup = (label: string, items: NavItem[], forceShow = false) => {
