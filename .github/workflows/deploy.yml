@@ -1,0 +1,80 @@
+name: Build and deploy to Hostinger
+
+# Pushing to v7-latest builds the app and uploads the result to the
+# society subdomain. Nothing is built or uploaded by hand any more.
+#
+# FIRST TIME: run this manually from the Actions tab with "dry run" left
+# ticked. Nothing is changed on the server; the log shows which directory
+# it would write into, so the path can be confirmed before anything is
+# overwritten.
+
+on:
+  push:
+    branches: [v7-latest]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — show what would change, upload nothing'
+        type: boolean
+        default: true
+
+concurrency:
+  group: deploy-society
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npx vitest run
+
+      # A broken build must never reach the server. If any step above
+      # fails, the upload below never runs.
+      - name: Build
+        run: npm run build
+
+      - name: Confirm .htaccess survived the build
+        run: |
+          test -f dist/.htaccess || {
+            echo "dist/.htaccess is missing — every deep route would 404 on refresh."
+            exit 1
+          }
+          grep -q 'RewriteRule \^ index.html \[L\]' dist/.htaccess || {
+            echo "dist/.htaccess has no valid SPA rewrite rule."
+            exit 1
+          }
+
+      - name: Upload to Hostinger
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          local-dir: ./dist/
+          server-dir: ${{ vars.FTP_SERVER_DIR }}
+          dry-run: ${{ inputs.dry_run == true }}
+          # api/ holds the PHP endpoints (upload.php, file.php). They live
+          # only on the server and are not part of the build, so they must
+          # be left alone or the file storage breaks.
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            api/**
+            private_storage/**
